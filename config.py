@@ -34,6 +34,16 @@ MAX_QUEUE: int = int(os.environ.get("AIRPI_MAX_QUEUE", "10"))
 # Sekunden ohne Nutzung bis Modell aus RAM entladen wird
 KEEP_ALIVE_TIMEOUT: int = int(os.environ.get("AIRPI_KEEP_ALIVE_TIMEOUT", "900"))  # 15 min
 
+# Sekunden bis eine inaktive Session aus dem Cache entfernt wird
+SESSION_TTL: int = int(os.environ.get("AIRPI_SESSION_TTL", "1800"))  # 30 min
+
+# Speculative Decoding via prompt-lookup (n-gram, zero extra RAM) oder draft model
+SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "true"
+
+# Dateiname des Draft-Modells für echtes Draft-Target Speculative Decoding (1.5B → Gemma/7B)
+# Nur aktiv wenn SPECULATIVE=true und das Modell eine "large"-Kennung trägt
+SPECULATIVE_DRAFT_MODEL: str | None = os.environ.get("AIRPI_SPECULATIVE_DRAFT_MODEL")
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 HOST: str = os.environ.get("AIRPI_HOST", "127.0.0.1")
