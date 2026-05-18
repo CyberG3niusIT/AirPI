@@ -1,0 +1,14 @@
+# AirPI — Inference Server für Raspberry Pi 5
+# Python 3.11+
+
+# LLM Inference (GGUF, ARM-optimiert)
+# Für Pi 5 (aarch64): llama-cpp-python muss mit CMAKE_ARGS für ARM gebaut werden.
+# Siehe README für Build-Anleitung.
+llama-cpp-python>=0.3.0
+
+# Web Framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Pydantic v2 (kommt mit FastAPI, aber explizit für Klarheit)
+pydantic>=2.0.0

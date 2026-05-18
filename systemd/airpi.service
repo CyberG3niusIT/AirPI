@@ -1,0 +1,46 @@
+[Unit]
+Description=AirPI Inference Server
+Documentation=https://github.com/CyberG3niusIT/AirPI
+After=network.target
+# Optional: nach Ollama starten falls beide parallel laufen
+# After=ollama.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/alex/AirPI
+
+# Virtuelle Umgebung — Pfad anpassen falls nötig
+ExecStart=/home/alex/AirPI/.venv/bin/uvicorn server:app \
+    --host 127.0.0.1 \
+    --port 11435 \
+    --workers 1 \
+    --log-level info \
+    --no-access-log
+
+# Umgebungsvariablen (können auch in /etc/airpi/env gesetzt werden)
+Environment=AIRPI_MODELS_DIR=/data/models
+Environment=AIRPI_DEFAULT_MODEL=qwen2.5-coder-1.5b-q4_k_m.gguf
+Environment=AIRPI_LARGE_MODEL=qwen2.5-coder-7b-q4_k_m.gguf
+Environment=AIRPI_N_THREADS=4
+Environment=AIRPI_N_CTX_SMALL=4096
+Environment=AIRPI_N_CTX_LARGE=2048
+Environment=AIRPI_MMAP=true
+Environment=AIRPI_MLOCK=false
+Environment=AIRPI_MAX_QUEUE=10
+Environment=AIRPI_KEEP_ALIVE_TIMEOUT=900
+
+# Neustart bei Fehler
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=3
+
+# Ressourcengrenzen — Pi 5 hat 8GB, Inference braucht 4-5GB für 7B
+# Kein MemoryLimit setzen (würde mmap-Paging behindern)
+TimeoutStartSec=120s    # Großes Modell beim Start laden kann lange dauern
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target
