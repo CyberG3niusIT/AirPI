@@ -136,7 +136,7 @@ async def list_models() -> dict:
     return {"models": models}
 
 
-@app.post("/api/generate")
+@app.post("/api/generate", response_model=None)
 async def generate(request: GenerateRequest) -> StreamingResponse | GenerateResponse:
     """Ollama-kompatibler Generate-Endpoint.
 
