@@ -37,6 +37,14 @@ def _is_large_model(model_name: str) -> bool:
     return any(m in lower for m in _LARGE_SIZE_MARKERS)
 
 
+def _is_recoverable_generation_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return isinstance(exc, ValueError) and (
+        "could not broadcast input array" in text
+        or "shape mismatch" in text
+    )
+
+
 def select_model_for_prompt(prompt: str, preferred_model: str | None = None) -> str:
     """Wählt Modell anhand Prompt-Keywords. preferred_model überschreibt alles."""
     if preferred_model:
@@ -239,9 +247,14 @@ class ModelManager:
                     else:
                         draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                         logger.warning("speculative: draft file not found, using prompt-lookup: %s", model_name)
-                else:
+                elif large:
                     draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                     logger.info("speculative: prompt-lookup enabled: %s", model_name)
+                else:
+                    logger.info(
+                        "speculative: disabled for small model due stability preference: %s",
+                        model_name,
+                    )
             except Exception as exc:
                 logger.warning("speculative decoding disabled (setup failed): %s", exc)
 
@@ -271,6 +284,27 @@ class ModelManager:
         async with self._session_lock:
             self._sessions[session_id] = (model_name, time.monotonic())
 
+    async def _invalidate_model_state(self, model_name: str) -> None:
+        async with self._lock:
+            removed = self._instances.pop(model_name, None)
+            if removed is not None:
+                logger.warning("invalidated model instance after generation failure: %s", model_name)
+
+        async with self._session_lock:
+            stale_sessions = [
+                session_id
+                for session_id, (bound_model, _) in self._sessions.items()
+                if bound_model == model_name
+            ]
+            for session_id in stale_sessions:
+                del self._sessions[session_id]
+            if stale_sessions:
+                logger.warning(
+                    "invalidated %d session(s) for model=%s after generation failure",
+                    len(stale_sessions),
+                    model_name,
+                )
+
     # ── Generate ──────────────────────────────────────────────────────────────
 
     async def generate(
@@ -286,10 +320,27 @@ class ModelManager:
         llm = await self.get(model_name)
         cache_hit = session_id is not None and self._is_session_valid(session_id, model_name)
         reset = not cache_hit
+        try:
+            result = await asyncio.to_thread(
+                _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, reset,
+            )
+        except Exception as exc:
+            if not _is_recoverable_generation_error(exc):
+                raise
 
-        result = await asyncio.to_thread(
-            _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, reset,
-        )
+            logger.warning(
+                "recoverable generate failure detected for model=%s session=%s cache_hit=%s: %s",
+                model_name,
+                session_id or "-",
+                cache_hit,
+                exc,
+            )
+            await self._invalidate_model_state(model_name)
+            llm = await self.get(model_name)
+            result = await asyncio.to_thread(
+                _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, True,
+            )
+            cache_hit = False
 
         if session_id is not None:
             await self._touch_session(session_id, model_name)
