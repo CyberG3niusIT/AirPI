@@ -47,6 +47,49 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
         manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-q4_k_m.gguf")
         manager._touch_session.assert_not_awaited()
 
+    async def test_stream_generate_retries_after_recoverable_failure(self) -> None:
+        manager = ModelManager()
+        manager.get = AsyncMock(side_effect=["llm-v1", "llm-v2"])
+        manager._invalidate_model_state = AsyncMock()
+        manager._is_session_valid = lambda session_id, model_name: False
+        manager._touch_session = AsyncMock()
+
+        calls = []
+
+        def fake_stream_with_cache(llm, prompt, max_tokens, temperature, top_p, stop, reset, queue, loop):
+            calls.append((llm, reset))
+            if len(calls) == 1:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    ValueError("could not broadcast input array from shape (1,) into shape (2,)"),
+                )
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, "recovered")
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        async def inline_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("model_manager._stream_with_cache", new=fake_stream_with_cache):
+            with patch("model_manager.asyncio.to_thread", new=inline_to_thread):
+                chunks = [
+                    chunk
+                    async for chunk in manager.stream_generate(
+                        model_name="qwen2.5-coder-1.5b-q4_k_m.gguf",
+                        prompt="hello",
+                        max_tokens=16,
+                        temperature=0.7,
+                        top_p=0.9,
+                        stop=["</s>"],
+                        session_id=None,
+                    )
+                ]
+
+        self.assertEqual(chunks, ["recovered"])
+        self.assertEqual(manager.get.await_count, 2)
+        self.assertEqual(calls, [("llm-v1", True), ("llm-v2", True)])
+        manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-q4_k_m.gguf")
+
     async def test_invalidate_model_state_removes_only_target_model(self) -> None:
         manager = ModelManager()
         manager._instances["target-model"] = ("llm-a", 1.0)

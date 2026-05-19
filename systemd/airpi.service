@@ -10,6 +10,7 @@ Type=simple
 User=alex
 Group=alex
 WorkingDirectory=/home/alex/AirPI
+EnvironmentFile=-/etc/airpi/airpi.env
 
 ExecStart=/home/alex/AirPI/.venv/bin/uvicorn server:app \
     --host 127.0.0.1 \
@@ -35,6 +36,13 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=120
 TimeoutStopSec=30
+OOMPolicy=stop
+MemoryHigh=6500M
+CPUWeight=80
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target

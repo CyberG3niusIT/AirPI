@@ -70,6 +70,17 @@ Large GGUF models can stay usable on an 8 GB Pi when the operating system pages 
 **Why AirPI instead of Ollama?**  
 AirPI keeps the same API shape but gives tighter control over cache reuse, queueing, speculative decoding, and model recovery.
 
+## Operations Surface
+
+| Endpoint | Purpose |
+| --- | --- |
+| `/live` | Process liveness |
+| `/ready` | Model storage and queue readiness |
+| `/health` | Runtime state, sessions, loaded models and recovery counters |
+| `/metrics` | Lightweight Prometheus text |
+| `/api/tags` | Ollama-compatible model list |
+| `/api/generate` | Ollama-compatible generation |
+
 ## Install
 
 ### 1. Create the Python environment
@@ -141,6 +152,16 @@ curl -X POST http://localhost:11435/api/generate \
   }'
 ```
 
+## Doctor and Benchmarks
+
+```bash
+scripts/airpi_doctor.py --base-url http://127.0.0.1:11435
+scripts/airpi_doctor.py --generate --json
+scripts/airpi_bench.py --dry-run --format markdown
+```
+
+See [API_CONTRACT.md](docs/API_CONTRACT.md) and [OPERATIONS.md](docs/OPERATIONS.md) for the stable API contract and Pi operations workflow.
+
 ## PI Guardian Integration
 
 Set the router base URL to AirPI:
@@ -150,6 +171,8 @@ OLLAMA_BASE_URL=http://127.0.0.1:11435
 ```
 
 AirPI stays API-compatible with Ollama, so no router rewrite is required.
+
+Example requests live in [examples](examples).
 
 ## Configuration
 
