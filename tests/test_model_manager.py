@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+import types
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
@@ -103,3 +107,35 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
         self.assertIn("other-model", manager._instances)
         self.assertNotIn("session-a", manager._sessions)
         self.assertIn("session-b", manager._sessions)
+
+    def test_load_passes_pi_tuning_options_to_llama(self) -> None:
+        manager = ModelManager()
+        calls = []
+
+        class FakeLlama:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+        fake_llama_module = types.SimpleNamespace(Llama=FakeLlama)
+
+        with TemporaryDirectory() as tmpdir:
+            model_path = Path(tmpdir) / "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+            model_path.write_bytes(b"gguf")
+
+            with patch.dict(sys.modules, {"llama_cpp": fake_llama_module}):
+                with patch("model_manager.MODELS_DIR", tmpdir):
+                    with patch("model_manager.N_CTX_SMALL", 2048):
+                        with patch("model_manager.N_THREADS", 3):
+                            with patch("model_manager.N_THREADS_BATCH", 4):
+                                with patch("model_manager.N_BATCH_SMALL", 1024):
+                                    with patch("model_manager.N_UBATCH_SMALL", 512):
+                                        with patch("model_manager.FLASH_ATTN", True):
+                                            manager._load(model_path.name)
+
+        self.assertEqual(calls[0]["model_path"], str(model_path))
+        self.assertEqual(calls[0]["n_ctx"], 2048)
+        self.assertEqual(calls[0]["n_threads"], 3)
+        self.assertEqual(calls[0]["n_threads_batch"], 4)
+        self.assertEqual(calls[0]["n_batch"], 1024)
+        self.assertEqual(calls[0]["n_ubatch"], 512)
+        self.assertTrue(calls[0]["flash_attn"])

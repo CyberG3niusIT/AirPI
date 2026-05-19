@@ -181,9 +181,15 @@ Example requests live in [examples](examples).
 | `AIRPI_MODELS_DIR` | `/data/models` | GGUF model directory |
 | `AIRPI_DEFAULT_MODEL` | `qwen2.5-coder-1.5b-q4_k_m.gguf` | Default model |
 | `AIRPI_LARGE_MODEL` | `qwen2.5-coder-7b-q4_k_m.gguf` | Large prompt model |
-| `AIRPI_N_THREADS` | `4` | CPU threads |
-| `AIRPI_N_CTX_SMALL` | `4096` | Small model context |
+| `AIRPI_N_THREADS` | `3` | CPU decode threads |
+| `AIRPI_N_CTX_SMALL` | `2048` | Small model context |
 | `AIRPI_N_CTX_LARGE` | `2048` | Large model context |
+| `AIRPI_N_THREADS_BATCH` | `4` | Prompt processing threads |
+| `AIRPI_N_BATCH_SMALL` | `1024` | Small model prompt batch |
+| `AIRPI_N_BATCH_LARGE` | `512` | Large model prompt batch |
+| `AIRPI_N_UBATCH_SMALL` | `512` | Small model micro batch |
+| `AIRPI_N_UBATCH_LARGE` | `256` | Large model micro batch |
+| `AIRPI_FLASH_ATTN` | `true` | Enable llama.cpp flash attention |
 | `AIRPI_MMAP` | `true` | Use mmap paging |
 | `AIRPI_MLOCK` | `false` | Keep model locked in RAM |
 | `AIRPI_MAX_QUEUE` | `10` | Max queued requests |

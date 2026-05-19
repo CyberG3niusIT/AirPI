@@ -15,12 +15,22 @@ LARGE_MODEL: str = os.environ.get(
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 
-# Pi 5 hat 4× ARM Cortex-A76 — alle 4 Threads nutzen
-N_THREADS: int = int(os.environ.get("AIRPI_N_THREADS", "4"))
+# Pi 5 CPU-only turbo profile. 3 decode threads measured slightly faster than 4
+# because one core remains available for uvicorn, kernel work, and memory paging.
+N_THREADS: int = int(os.environ.get("AIRPI_N_THREADS", "3"))
 
-# Context-Länge pro Modellgröße (kleiner = weniger RAM)
-N_CTX_SMALL: int = int(os.environ.get("AIRPI_N_CTX_SMALL", "4096"))
+# Context-Länge pro Modellgröße (kleiner = weniger RAM und schnellerer KV-Cache)
+N_CTX_SMALL: int = int(os.environ.get("AIRPI_N_CTX_SMALL", "2048"))
 N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "2048"))
+
+# Prompt ingestion tuning. These values are conservative for Raspberry Pi 5
+# and can be overridden from /etc/airpi/airpi.env.
+N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "4"))
+N_BATCH_SMALL: int = int(os.environ.get("AIRPI_N_BATCH_SMALL", "1024"))
+N_BATCH_LARGE: int = int(os.environ.get("AIRPI_N_BATCH_LARGE", "512"))
+N_UBATCH_SMALL: int = int(os.environ.get("AIRPI_N_UBATCH_SMALL", "512"))
+N_UBATCH_LARGE: int = int(os.environ.get("AIRPI_N_UBATCH_LARGE", "256"))
+FLASH_ATTN: bool = os.environ.get("AIRPI_FLASH_ATTN", "true").lower() == "true"
 
 # mmap=True: OS-Paging via NVMe — ermöglicht Modelle > RAM-Größe
 MMAP: bool = os.environ.get("AIRPI_MMAP", "true").lower() == "true"

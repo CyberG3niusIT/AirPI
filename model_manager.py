@@ -13,12 +13,18 @@ from config import (
     KEEP_ALIVE_TIMEOUT,
     LARGE_MODEL_KEYWORDS,
     LARGE_MODEL,
+    FLASH_ATTN,
     MLOCK,
     MMAP,
+    N_BATCH_LARGE,
+    N_BATCH_SMALL,
     MODELS_DIR,
     N_CTX_LARGE,
     N_CTX_SMALL,
     N_THREADS,
+    N_THREADS_BATCH,
+    N_UBATCH_LARGE,
+    N_UBATCH_SMALL,
     SESSION_TTL,
     SPECULATIVE,
     SPECULATIVE_DRAFT_MODEL,
@@ -257,6 +263,8 @@ class ModelManager:
 
         large = _is_large_model(model_name)
         n_ctx = N_CTX_LARGE if large else N_CTX_SMALL
+        n_batch = N_BATCH_LARGE if large else N_BATCH_SMALL
+        n_ubatch = N_UBATCH_LARGE if large else N_UBATCH_SMALL
         draft_model = None
 
         if SPECULATIVE:
@@ -269,6 +277,10 @@ class ModelManager:
                             model_path=draft_path,
                             n_ctx=N_CTX_SMALL,
                             n_threads=N_THREADS,
+                            n_threads_batch=N_THREADS_BATCH,
+                            n_batch=N_BATCH_SMALL,
+                            n_ubatch=N_UBATCH_SMALL,
+                            flash_attn=FLASH_ATTN,
                             use_mmap=MMAP,
                             use_mlock=False,
                             verbose=False,
@@ -293,13 +305,30 @@ class ModelManager:
                 logger.warning("speculative decoding disabled (setup failed): %s", exc)
 
         logger.info(
-            "llama_cpp load: model=%s n_ctx=%d n_threads=%d mmap=%s mlock=%s speculative=%s",
-            model_name, n_ctx, N_THREADS, MMAP, MLOCK, draft_model is not None,
+            (
+                "llama_cpp load: model=%s n_ctx=%d n_threads=%d "
+                "n_threads_batch=%d n_batch=%d n_ubatch=%d flash_attn=%s "
+                "mmap=%s mlock=%s speculative=%s"
+            ),
+            model_name,
+            n_ctx,
+            N_THREADS,
+            N_THREADS_BATCH,
+            n_batch,
+            n_ubatch,
+            FLASH_ATTN,
+            MMAP,
+            MLOCK,
+            draft_model is not None,
         )
         return Llama(
             model_path=path,
             n_ctx=n_ctx,
             n_threads=N_THREADS,
+            n_threads_batch=N_THREADS_BATCH,
+            n_batch=n_batch,
+            n_ubatch=n_ubatch,
+            flash_attn=FLASH_ATTN,
             use_mmap=MMAP,
             use_mlock=MLOCK,
             verbose=False,

@@ -22,9 +22,15 @@ ExecStart=/home/alex/AirPI/.venv/bin/uvicorn server:app \
 Environment=AIRPI_MODELS_DIR=/data/models
 Environment=AIRPI_DEFAULT_MODEL=qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
 Environment=AIRPI_LARGE_MODEL=gemma-3-4b-it-Q4_K_M.gguf
-Environment=AIRPI_N_THREADS=4
-Environment=AIRPI_N_CTX_SMALL=4096
+Environment=AIRPI_N_THREADS=3
+Environment=AIRPI_N_CTX_SMALL=2048
 Environment=AIRPI_N_CTX_LARGE=2048
+Environment=AIRPI_N_THREADS_BATCH=4
+Environment=AIRPI_N_BATCH_SMALL=1024
+Environment=AIRPI_N_BATCH_LARGE=512
+Environment=AIRPI_N_UBATCH_SMALL=512
+Environment=AIRPI_N_UBATCH_LARGE=256
+Environment=AIRPI_FLASH_ATTN=true
 Environment=AIRPI_MMAP=true
 Environment=AIRPI_MLOCK=false
 Environment=AIRPI_MAX_QUEUE=10
