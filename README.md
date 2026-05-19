@@ -1,4 +1,4 @@
-# AirPI — LLM Inference Server für Raspberry Pi 5
+# AirPI: LLM Inference Server für Raspberry Pi 5
 
 Ollama-kompatibler Inference-Server auf Basis von `llama-cpp-python`.  
 Designed für **Raspberry Pi 5 · 8GB RAM · NVMe SSD**.
@@ -9,19 +9,19 @@ Designed für **Raspberry Pi 5 · 8GB RAM · NVMe SSD**.
 |---------|--------|-------|
 | 7B Modelle (4GB GGUF) | Ja | Ja |
 | 14B Modelle via mmap-Paging | Nein | Ja (NVMe als Backing) |
-| Concurrency-Control | Nein | Semaphore(1) — volle CPU-Zeit |
+| Concurrency-Control | Nein | Semaphore(1), volle CPU-Zeit |
 | Keep-Alive konfigurierbar | 5 min (default) | 15 min (konfigurierbar) |
 | Direktes llama.cpp auf ARM | Nein (Daemon) | Ja (kein Overhead) |
-| Ollama-kompatible API | – | Ja (drop-in) |
+| Ollama-kompatible API | n/a | Ja (drop-in) |
 
 ## Performance (Pi 5, gemessen)
 
 | Modell | RAM | tok/sec |
 |--------|-----|---------|
-| Qwen2.5-Coder 1.5B Q4_K_M | 1.2 GB | 10–15 |
-| Qwen2.5-Coder 3B Q4_K_M | 2.5 GB | 6–10 |
-| Qwen2.5-Coder 7B Q4_K_M | 4.1 GB | 2–4 |
-| Qwen2.5-Coder 14B Q4_K_M | 8.1 GB | 1–2 (mmap via NVMe) |
+| Qwen2.5-Coder 1.5B Q4_K_M | 1.2 GB | 10 bis 15 |
+| Qwen2.5-Coder 3B Q4_K_M | 2.5 GB | 6 bis 10 |
+| Qwen2.5-Coder 7B Q4_K_M | 4.1 GB | 2 bis 4 |
+| Qwen2.5-Coder 14B Q4_K_M | 8.1 GB | 1 bis 2 (mmap via NVMe) |
 
 ---
 
@@ -37,7 +37,7 @@ source .venv/bin/activate
 
 ### 2. llama-cpp-python für ARM64 bauen
 
-llama-cpp-python muss für aarch64 (Pi 5) kompiliert werden. Das dauert ~10–15 Minuten.
+llama-cpp-python muss für aarch64 (Pi 5) kompiliert werden. Das dauert ungefähr 10 bis 15 Minuten.
 
 ```bash
 # ARM NEON Optimierungen aktivieren
@@ -58,7 +58,7 @@ pip install -r requirements.txt
 sudo mkdir -p /data/models
 sudo chown pi:pi /data/models
 
-# Qwen2.5-Coder 1.5B (klein, schnell — für tägliche Tasks)
+# Qwen2.5-Coder 1.5B (klein, schnell, für tägliche Tasks)
 pip install huggingface_hub
 huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF \
   qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
@@ -69,7 +69,7 @@ huggingface-cli download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
   qwen2.5-coder-7b-instruct-q4_k_m.gguf \
   --local-dir /data/models
 
-# Optional: 14B (via mmap/NVMe-Paging, ~1-2 tok/sec)
+# Optional: 14B (via mmap/NVMe-Paging, ungefähr 1 bis 2 tok/sec)
 # huggingface-cli download Qwen/Qwen2.5-Coder-14B-Instruct-GGUF \
 #   qwen2.5-coder-14b-instruct-q4_k_m.gguf \
 #   --local-dir /data/models
@@ -136,7 +136,7 @@ Damit PI Guardian AirPI statt Ollama nutzt, `OLLAMA_BASE_URL` in der Router-Conf
 OLLAMA_BASE_URL=http://127.0.0.1:11435
 ```
 
-AirPI ist Ollama-kompatibel — keine weiteren Änderungen nötig.
+AirPI ist Ollama-kompatibel, keine weiteren Änderungen nötig.
 
 ---
 
@@ -180,7 +180,7 @@ Antwort im Ollama-Format
 ```
 
 **Warum `Semaphore(1)`?**  
-Der Pi 5 (ARM Cortex-A76, 4 Kerne) verarbeitet einen LLM-Call mit allen 4 Threads in 2–4 tok/sec. Zwei parallele Calls würden je 2 Threads bekommen und beide mit ~0.8 tok/sec laufen — deutlich schlechter. Serialisierung ist auf ARM ohne GPU die effizientere Strategie.
+Der Pi 5 (ARM Cortex-A76, 4 Kerne) verarbeitet einen LLM-Call mit allen 4 Threads in 2 bis 4 tok/sec. Zwei parallele Calls würden je 2 Threads bekommen und beide mit ungefähr 0.8 tok/sec laufen, deutlich schlechter. Serialisierung ist auf ARM ohne GPU die effizientere Strategie.
 
 **Warum `use_mmap=True`?**  
-Für 14B Modelle (8GB GGUF) auf einem 8GB Pi: Das OS kann Layer, die aktuell nicht im Forward-Pass benötigt werden, transparent auf die NVMe auslagern (200–400 MB/s). Der Effekt: 14B läuft mit ~1–2 tok/sec statt gar nicht. Für 7B (4GB) liegt das gesamte Modell im RAM.
+Für 14B Modelle (8GB GGUF) auf einem 8GB Pi: Das OS kann Layer, die aktuell nicht im Forward-Pass benötigt werden, transparent auf die NVMe auslagern (200 bis 400 MB/s). Der Effekt: 14B läuft mit ungefähr 1 bis 2 tok/sec statt gar nicht. Für 7B (4GB) liegt das gesamte Modell im RAM.
