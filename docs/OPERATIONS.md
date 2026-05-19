@@ -19,6 +19,7 @@ The benchmark script reports local measurements only. Publish numbers together w
 Recorded local benchmark reports:
 
 - [BENCHMARK_2026-05-19.md](BENCHMARK_2026-05-19.md)
+- [MODEL_SHOOTOUT_2026-05-19.md](MODEL_SHOOTOUT_2026-05-19.md)
 
 ## Pi 5 Performance Profile
 
