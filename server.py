@@ -137,6 +137,9 @@ class GenerateRequest(BaseModel):
     model: str
     prompt: str
     stream: bool = False
+    format: str | None = None
+    response_format: str | None = None
+    required_json_keys: list[str] | None = None
     max_tokens: int = Field(default=512, ge=1, le=8192)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
@@ -155,6 +158,58 @@ class GenerateResponse(BaseModel):
     total_duration: int = 0
     eval_count: int = 0
     eval_duration: int = 0
+
+
+def _wants_json_response(request: GenerateRequest) -> bool:
+    return request.format == "json" or request.response_format == "json_object"
+
+
+def _json_prompt(prompt: str, required_keys: list[str] | None) -> str:
+    key_text = ""
+    if required_keys:
+        key_text = " Required keys: " + ", ".join(required_keys) + "."
+    return (
+        "Return exactly one valid JSON object. No markdown. No prose."
+        f"{key_text}\n\n"
+        f"{prompt}"
+    )
+
+
+def _extract_json_object(text: str) -> dict:
+    decoder = json.JSONDecoder()
+    stripped = text.strip()
+    for index, char in enumerate(stripped):
+        if char != "{":
+            continue
+        try:
+            parsed, end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and not stripped[index + end:].strip():
+            return parsed
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("No valid JSON object found")
+
+
+def _normalize_json_response(text: str, required_keys: list[str] | None) -> str:
+    parsed = _extract_json_object(text)
+    missing = [key for key in (required_keys or []) if key not in parsed]
+    if missing:
+        raise ValueError("Missing required JSON keys: " + ", ".join(missing))
+    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+
+def _repair_json_prompt(raw_text: str, required_keys: list[str] | None) -> str:
+    key_text = ""
+    if required_keys:
+        key_text = " Required keys: " + ", ".join(required_keys) + "."
+    return (
+        "Convert the following text to exactly one valid JSON object."
+        " No markdown. No prose."
+        f"{key_text}\n\n"
+        f"{raw_text}"
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -179,12 +234,15 @@ async def health() -> dict:
 async def ready() -> dict:
     models_dir_exists = os.path.isdir(config.MODELS_DIR)
     default_model_path = os.path.join(config.MODELS_DIR, config.DEFAULT_MODEL)
+    fast_model_path = os.path.join(config.MODELS_DIR, config.FAST_MODEL)
     default_model_exists = os.path.isfile(default_model_path)
-    ready_state = models_dir_exists and default_model_exists and _queue_depth < config.MAX_QUEUE
+    fast_model_exists = os.path.isfile(fast_model_path)
+    ready_state = models_dir_exists and default_model_exists and fast_model_exists and _queue_depth < config.MAX_QUEUE
     payload = {
         "status": "ready" if ready_state else "not_ready",
         "models_dir_exists": models_dir_exists,
         "default_model_exists": default_model_exists,
+        "fast_model_exists": fast_model_exists,
         "queue_depth": _queue_depth,
         "max_queue": config.MAX_QUEUE,
         "runtime": manager.runtime_status(),
@@ -313,9 +371,10 @@ async def _blocking_generate(
     model_name: str,
     start_ns: int,
 ) -> GenerateResponse:
+    prompt = _json_prompt(request.prompt, request.required_json_keys) if _wants_json_response(request) else request.prompt
     result = await manager.generate(
         model_name=model_name,
-        prompt=request.prompt,
+        prompt=prompt,
         max_tokens=request.max_tokens,
         temperature=request.temperature,
         top_p=request.top_p,
@@ -326,6 +385,26 @@ async def _blocking_generate(
     elapsed_ns = time.perf_counter_ns() - start_ns
     choice = result["choices"][0]
     tokens = result.get("usage", {}).get("completion_tokens", 0)
+    response_text = choice.get("text", "")
+
+    if _wants_json_response(request):
+        try:
+            response_text = _normalize_json_response(response_text, request.required_json_keys)
+        except ValueError:
+            repair = await manager.generate(
+                model_name=model_name,
+                prompt=_repair_json_prompt(response_text, request.required_json_keys),
+                max_tokens=request.max_tokens,
+                temperature=0.0,
+                top_p=1.0,
+                stop=request.stop,
+                session_id=None,
+            )
+            repair_choice = repair["choices"][0]
+            repair_tokens = repair.get("usage", {}).get("completion_tokens", 0)
+            tokens += repair_tokens
+            response_text = _normalize_json_response(repair_choice.get("text", ""), request.required_json_keys)
+
     cache_hit = bool(result.get("airpi", {}).get("cache_hit"))
     metrics.record_request(model_name, elapsed_ns / 1_000_000_000, tokens, cache_hit)
 
@@ -333,7 +412,7 @@ async def _blocking_generate(
 
     return GenerateResponse(
         model=model_name,
-        response=choice.get("text", ""),
+        response=response_text,
         done=True,
         done_reason=choice.get("finish_reason", "stop"),
         total_duration=elapsed_ns,

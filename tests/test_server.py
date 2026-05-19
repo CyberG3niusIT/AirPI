@@ -56,6 +56,22 @@ class ServerContractTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["status"], "not_ready")
         self.assertTrue(payload["models_dir_exists"])
         self.assertFalse(payload["default_model_exists"])
+        self.assertFalse(payload["fast_model_exists"])
+
+    async def test_ready_reports_not_ready_without_fast_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(f"{tmpdir}/default.gguf", "wb") as handle:
+                handle.write(b"gguf")
+            with patch.object(server.config, "MODELS_DIR", tmpdir):
+                with patch.object(server.config, "DEFAULT_MODEL", "default.gguf"):
+                    with patch.object(server.config, "FAST_MODEL", "missing-fast.gguf"):
+                        response = await server.ready()
+
+        self.assertIsInstance(response, JSONResponse)
+        payload = json.loads(response.body)
+        self.assertEqual(response.status_code, 503)
+        self.assertTrue(payload["default_model_exists"])
+        self.assertFalse(payload["fast_model_exists"])
 
     async def test_generate_success_records_metrics(self) -> None:
         payload = {
@@ -73,6 +89,111 @@ class ServerContractTests(IsolatedAsyncioTestCase):
         self.assertEqual(server.metrics.requests_total, 1)
         self.assertEqual(server.metrics.cache_hit_total, 1)
         self.assertEqual(server.metrics.tokens_total, 1)
+
+    async def test_generate_resolves_fast_lane_alias(self) -> None:
+        payload = {
+            "choices": [{"text": "fast", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+            "airpi": {"cache_hit": False},
+        }
+        with patch.object(server.config, "FAST_MODEL", "fast-model.gguf"):
+            with patch("model_manager.FAST_MODEL", "fast-model.gguf"):
+                with patch.object(server.manager, "generate", new=AsyncMock(return_value=payload)) as generate:
+                    response = await server.generate(
+                        server.GenerateRequest(model="fast", prompt="status", stream=False),
+                        DummyRequest(),
+                    )
+
+        self.assertEqual(response.model, "fast-model.gguf")
+        generate.assert_awaited_once()
+        self.assertEqual(generate.await_args.kwargs["model_name"], "fast-model.gguf")
+
+    async def test_generate_resolves_preferred_fast_lane_alias(self) -> None:
+        payload = {
+            "choices": [{"text": "fast", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+        with patch.object(server.config, "FAST_MODEL", "fast-model.gguf"):
+            with patch("model_manager.FAST_MODEL", "fast-model.gguf"):
+                with patch.object(server.manager, "generate", new=AsyncMock(return_value=payload)) as generate:
+                    response = await server.generate(
+                        server.GenerateRequest(
+                            model="ignored.gguf",
+                            preferred_model="fast",
+                            prompt="status",
+                            stream=False,
+                        ),
+                        DummyRequest(),
+                    )
+
+        self.assertEqual(response.model, "fast-model.gguf")
+        self.assertEqual(generate.await_args.kwargs["model_name"], "fast-model.gguf")
+
+    async def test_generate_json_mode_normalizes_json_response(self) -> None:
+        payload = {
+            "choices": [{"text": "Here is JSON: {\"decision\":\"allow\",\"risk\":\"low\",\"reason\":\"synthetic\"}", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11},
+        }
+        with patch.object(server.manager, "generate", new=AsyncMock(return_value=payload)):
+            response = await server.generate(
+                server.GenerateRequest(
+                    model="test.gguf",
+                    prompt="route",
+                    stream=False,
+                    format="json",
+                    required_json_keys=["decision", "risk", "reason"],
+                ),
+                DummyRequest(),
+            )
+
+        self.assertEqual(response.response, '{"decision":"allow","risk":"low","reason":"synthetic"}')
+
+    async def test_generate_json_mode_repairs_once(self) -> None:
+        first = {
+            "choices": [{"text": "decision allow risk low reason synthetic", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8},
+        }
+        second = {
+            "choices": [{"text": "{\"decision\":\"allow\",\"risk\":\"low\",\"reason\":\"synthetic\"}", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11},
+        }
+        with patch.object(server.manager, "generate", new=AsyncMock(side_effect=[first, second])) as generate:
+            response = await server.generate(
+                server.GenerateRequest(
+                    model="test.gguf",
+                    prompt="route",
+                    stream=False,
+                    response_format="json_object",
+                    required_json_keys=["decision", "risk", "reason"],
+                ),
+                DummyRequest(),
+            )
+
+        self.assertEqual(generate.await_count, 2)
+        self.assertEqual(response.response, '{"decision":"allow","risk":"low","reason":"synthetic"}')
+
+    async def test_generate_json_mode_fails_after_invalid_repair(self) -> None:
+        payload = {
+            "choices": [{"text": "not json", "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        with patch.object(server.manager, "generate", new=AsyncMock(side_effect=[payload, payload])):
+            with self.assertRaises(HTTPException) as raised:
+                await server.generate(
+                    server.GenerateRequest(
+                        model="test.gguf",
+                        prompt="route",
+                        stream=False,
+                        format="json",
+                        required_json_keys=["decision", "risk", "reason"],
+                    ),
+                    DummyRequest(),
+                )
+
+        detail = raised.exception.detail["error"]
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertEqual(detail["code"], server.ErrorCode.INFERENCE_FAILED)
+        self.assertTrue(detail["retryable"])
 
     async def test_generate_model_not_found_error_contract(self) -> None:
         with patch.object(server.manager, "generate", new=AsyncMock(side_effect=FileNotFoundError("missing"))):

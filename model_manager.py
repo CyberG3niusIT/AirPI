@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from config import (
+    DEFAULT_MODEL,
+    FAST_MODEL,
+    FAST_MODEL_ALIASES,
     KEEP_ALIVE_TIMEOUT,
     LARGE_MODEL_KEYWORDS,
     LARGE_MODEL,
@@ -64,13 +67,18 @@ def _is_recoverable_generation_error(exc: Exception) -> bool:
 
 
 def select_model_for_prompt(prompt: str, preferred_model: str | None = None) -> str:
-    """Wählt Modell anhand Prompt-Keywords. preferred_model überschreibt alles."""
+    """Wählt Modell anhand Alias, explizitem Modell oder Prompt-Keywords."""
     if preferred_model:
+        if preferred_model.lower() in FAST_MODEL_ALIASES:
+            return FAST_MODEL
+        if preferred_model.lower() == "default":
+            return DEFAULT_MODEL
+        if preferred_model.lower() == "large":
+            return LARGE_MODEL
         return preferred_model
     prompt_lower = prompt.lower()
     if any(kw in prompt_lower for kw in LARGE_MODEL_KEYWORDS):
         return LARGE_MODEL
-    from config import DEFAULT_MODEL
     return DEFAULT_MODEL
 
 

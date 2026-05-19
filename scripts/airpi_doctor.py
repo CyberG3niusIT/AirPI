@@ -44,7 +44,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Check an AirPI installation.")
     parser.add_argument("--base-url", default="http://127.0.0.1:11435")
     parser.add_argument("--models-dir", default=os.environ.get("AIRPI_MODELS_DIR", "/data/models"))
-    parser.add_argument("--model", default=os.environ.get("AIRPI_DEFAULT_MODEL", "qwen2.5-coder-1.5b-q4_k_m.gguf"))
+    parser.add_argument("--model", default=os.environ.get("AIRPI_DEFAULT_MODEL", "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"))
     parser.add_argument("--generate", action="store_true", help="Run a small generate request.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     args = parser.parse_args()

@@ -146,7 +146,7 @@ curl http://localhost:11435/api/tags
 curl -X POST http://localhost:11435/api/generate \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen2.5-coder-1.5b-q4_k_m.gguf",
+    "model": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
     "prompt": "Was ist 2+2?",
     "stream": false
   }'
@@ -179,7 +179,8 @@ Example requests live in [examples](examples).
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AIRPI_MODELS_DIR` | `/data/models` | GGUF model directory |
-| `AIRPI_DEFAULT_MODEL` | `qwen2.5-coder-1.5b-q4_k_m.gguf` | Default model |
+| `AIRPI_DEFAULT_MODEL` | `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` | Default model |
+| `AIRPI_FAST_MODEL` | `Qwen2.5-0.5B-Instruct-Q4_K_M.gguf` | Fast-lane model for low-latency requests |
 | `AIRPI_LARGE_MODEL` | `qwen2.5-coder-7b-q4_k_m.gguf` | Large prompt model |
 | `AIRPI_N_THREADS` | `3` | CPU decode threads |
 | `AIRPI_N_CTX_SMALL` | `2048` | Small model context |
@@ -202,3 +203,4 @@ Example requests live in [examples](examples).
 - The server logs loaded models and active sessions on `/health`.
 - The retry path handles recoverable broadcast and shape mismatch failures in `llama_cpp`.
 - The service unit is designed for a local-only Pi deployment.
+- PI Guardian can request the fast lane with `model="fast"` or `preferred_model="fast"`.

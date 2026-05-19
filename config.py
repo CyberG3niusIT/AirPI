@@ -7,7 +7,10 @@ import os
 MODELS_DIR: str = os.environ.get("AIRPI_MODELS_DIR", "/data/models")
 
 DEFAULT_MODEL: str = os.environ.get(
-    "AIRPI_DEFAULT_MODEL", "qwen2.5-coder-1.5b-q4_k_m.gguf"
+    "AIRPI_DEFAULT_MODEL", "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+)
+FAST_MODEL: str = os.environ.get(
+    "AIRPI_FAST_MODEL", "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"
 )
 LARGE_MODEL: str = os.environ.get(
     "AIRPI_LARGE_MODEL", "qwen2.5-coder-7b-q4_k_m.gguf"
@@ -63,6 +66,8 @@ LOG_LEVEL: str = os.environ.get("AIRPI_LOG_LEVEL", "INFO")
 
 # ── Keyword-basierte Modellauswahl ────────────────────────────────────────────
 # Prompts mit diesen Keywords werden mit dem größeren Modell bearbeitet
+FAST_MODEL_ALIASES: set[str] = {"fast", "fast-lane", "airpi-fast"}
+
 LARGE_MODEL_KEYWORDS: list[str] = [
     "architektur", "refactor", "analyse", "debug", "komplex",
     "architecture", "complex", "analysis",

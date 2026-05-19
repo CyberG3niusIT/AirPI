@@ -21,6 +21,7 @@ ExecStart=/home/alex/AirPI/.venv/bin/uvicorn server:app \
 
 Environment=AIRPI_MODELS_DIR=/data/models
 Environment=AIRPI_DEFAULT_MODEL=qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+Environment=AIRPI_FAST_MODEL=Qwen2.5-0.5B-Instruct-Q4_K_M.gguf
 Environment=AIRPI_LARGE_MODEL=gemma-3-4b-it-Q4_K_M.gguf
 Environment=AIRPI_N_THREADS=3
 Environment=AIRPI_N_CTX_SMALL=2048

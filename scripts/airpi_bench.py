@@ -70,7 +70,7 @@ def markdown(results: list[BenchResult]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run reproducible AirPI benchmark cases.")
     parser.add_argument("--base-url", default="http://127.0.0.1:11435")
-    parser.add_argument("--model", default="qwen2.5-coder-1.5b-q4_k_m.gguf")
+    parser.add_argument("--model", default="qwen2.5-coder-1.5b-instruct-q4_k_m.gguf")
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--timeout", type=float, default=120.0)

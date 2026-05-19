@@ -7,10 +7,24 @@ from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
-from model_manager import ModelManager, _is_recoverable_generation_error
+from model_manager import ModelManager, _is_recoverable_generation_error, select_model_for_prompt
 
 
 class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
+    def test_select_model_resolves_fast_lane_alias(self) -> None:
+        with patch("model_manager.FAST_MODEL", "fast-model.gguf"):
+            self.assertEqual(select_model_for_prompt("short answer", "fast"), "fast-model.gguf")
+            self.assertEqual(select_model_for_prompt("short answer", "airpi-fast"), "fast-model.gguf")
+
+    def test_select_model_resolves_builtin_aliases(self) -> None:
+        with patch("model_manager.DEFAULT_MODEL", "default-model.gguf"):
+            with patch("model_manager.LARGE_MODEL", "large-model.gguf"):
+                self.assertEqual(select_model_for_prompt("short answer", "default"), "default-model.gguf")
+                self.assertEqual(select_model_for_prompt("short answer", "large"), "large-model.gguf")
+
+    def test_select_model_keeps_explicit_model_name(self) -> None:
+        self.assertEqual(select_model_for_prompt("short answer", "custom.gguf"), "custom.gguf")
+
     def test_recoverable_generation_error_detection(self) -> None:
         self.assertTrue(
             _is_recoverable_generation_error(ValueError("could not broadcast input array from shape (1,) into shape (2,)"))
@@ -36,7 +50,7 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
             success_payload,
         ])) as to_thread:
             result = await manager.generate(
-                model_name="qwen2.5-coder-1.5b-q4_k_m.gguf",
+                model_name="qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
                 prompt="hello",
                 max_tokens=16,
                 temperature=0.7,
@@ -48,7 +62,7 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
         self.assertEqual(result, success_payload)
         self.assertEqual(manager.get.await_count, 2)
         self.assertEqual(to_thread.await_count, 2)
-        manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-q4_k_m.gguf")
+        manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-instruct-q4_k_m.gguf")
         manager._touch_session.assert_not_awaited()
 
     async def test_stream_generate_retries_after_recoverable_failure(self) -> None:
@@ -79,7 +93,7 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
                 chunks = [
                     chunk
                     async for chunk in manager.stream_generate(
-                        model_name="qwen2.5-coder-1.5b-q4_k_m.gguf",
+                        model_name="qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
                         prompt="hello",
                         max_tokens=16,
                         temperature=0.7,
@@ -92,7 +106,7 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
         self.assertEqual(chunks, ["recovered"])
         self.assertEqual(manager.get.await_count, 2)
         self.assertEqual(calls, [("llm-v1", True), ("llm-v2", True)])
-        manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-q4_k_m.gguf")
+        manager._invalidate_model_state.assert_awaited_once_with("qwen2.5-coder-1.5b-instruct-q4_k_m.gguf")
 
     async def test_invalidate_model_state_removes_only_target_model(self) -> None:
         manager = ModelManager()
