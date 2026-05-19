@@ -16,6 +16,10 @@ scripts/airpi_bench.py --model qwen2.5-coder-1.5b-q4_k_m.gguf --format json
 
 The benchmark script reports local measurements only. Publish numbers together with model name, hardware, Python version and llama-cpp build flags.
 
+Recorded local benchmark reports:
+
+- [BENCHMARK_2026-05-19.md](BENCHMARK_2026-05-19.md)
+
 ## Health Model
 
 - `/live` means the process can answer.
