@@ -66,6 +66,27 @@ def _inference_timeout(model_name: str) -> int:
     return INFERENCE_TIMEOUT_LARGE if _is_large_model(model_name) else INFERENCE_TIMEOUT_SMALL
 
 
+# Bekannte Tokenizer-Familien. Nur Modelle aus derselben Familie teilen kompatible
+# Token-ID-Räume und dürfen als Draft-Target-Paare verwendet werden.
+_TOKENIZER_FAMILIES: tuple[frozenset[str], ...] = (
+    frozenset({"qwen", "qwen2", "qwen2.5"}),
+    frozenset({"gemma", "gemma2", "gemma3", "gemma-3"}),
+    frozenset({"llama", "llama2", "llama3"}),
+    frozenset({"mistral", "mixtral"}),
+    frozenset({"phi", "phi2", "phi3"}),
+)
+
+
+def _same_tokenizer_family(name_a: str, name_b: str) -> bool:
+    """True wenn beide Modellnamen zur gleichen Tokenizer-Familie gehören."""
+    lower_a = name_a.lower()
+    lower_b = name_b.lower()
+    for family in _TOKENIZER_FAMILIES:
+        if any(f in lower_a for f in family) and any(f in lower_b for f in family):
+            return True
+    return False
+
+
 def validate_model_name(model_name: str) -> str:
     """Accept only GGUF basenames, never paths."""
     if model_name != model_name.strip():
@@ -349,23 +370,36 @@ class ModelManager:
                 if large and SPECULATIVE_DRAFT_MODEL:
                     draft_path = resolve_model_path(SPECULATIVE_DRAFT_MODEL)
                     if draft_path.is_file():
-                        draft_llm = Llama(
-                            model_path=str(draft_path),
-                            n_ctx=N_CTX_SMALL,
-                            n_threads=N_THREADS,
-                            n_threads_batch=N_THREADS_BATCH,
-                            n_batch=N_BATCH_SMALL,
-                            n_ubatch=N_UBATCH_SMALL,
-                            flash_attn=FLASH_ATTN,
-                            use_mmap=MMAP,
-                            use_mlock=False,
-                            verbose=False,
-                        )
-                        draft_model = LlamaModelDraft(draft_llm)
-                        logger.info(
-                            "speculative: draft-target enabled (draft=%s target=%s)",
-                            SPECULATIVE_DRAFT_MODEL, model_name,
-                        )
+                        # Tokenizer-Kompatibilitätscheck anhand des Modellnamens.
+                        # Verschiedene Tokenizer-Familien (Qwen 152K, Gemma 262K, …) verwenden
+                        # nicht-überlappende Token-ID-Räume. Wenn Gemma Token-IDs > 152K an das
+                        # Qwen-Draft-Modell weitergibt, liefert llama_decode -1.
+                        # Nur wenn beide Modelle aus derselben Familie stammen, ist Draft-Target sicher.
+                        if not _same_tokenizer_family(SPECULATIVE_DRAFT_MODEL, model_name):
+                            logger.warning(
+                                "speculative: tokenizer family mismatch (draft=%s, target=%s) — "
+                                "falling back to prompt-lookup to avoid invalid token IDs",
+                                SPECULATIVE_DRAFT_MODEL, model_name,
+                            )
+                            draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
+                        else:
+                            draft_llm = Llama(
+                                model_path=str(draft_path),
+                                n_ctx=N_CTX_SMALL,
+                                n_threads=N_THREADS,
+                                n_threads_batch=N_THREADS_BATCH,
+                                n_batch=N_BATCH_SMALL,
+                                n_ubatch=N_UBATCH_SMALL,
+                                flash_attn=FLASH_ATTN,
+                                use_mmap=MMAP,
+                                use_mlock=False,
+                                verbose=False,
+                            )
+                            draft_model = LlamaModelDraft(draft_llm)
+                            logger.info(
+                                "speculative: draft-target enabled (draft=%s target=%s)",
+                                SPECULATIVE_DRAFT_MODEL, model_name,
+                            )
                     else:
                         draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                         logger.warning("speculative: draft file not found, using prompt-lookup: %s", model_name)
