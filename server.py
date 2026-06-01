@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -25,10 +26,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 import config
-from model_manager import manager, select_model_for_prompt
+from model_manager import build_json_grammar, manager, select_model_for_prompt
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -44,6 +45,7 @@ class ErrorCode:
     MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
     QUEUE_FULL = "QUEUE_FULL"
     INFERENCE_FAILED = "INFERENCE_FAILED"
+    INFERENCE_TIMEOUT = "INFERENCE_TIMEOUT"
     MODEL_RECOVERED = "MODEL_RECOVERED"
     SERVICE_NOT_READY = "SERVICE_NOT_READY"
 
@@ -135,7 +137,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 class GenerateRequest(BaseModel):
     model: str
-    prompt: str
+    prompt: str = Field(min_length=1, max_length=config.MAX_PROMPT_CHARS)
     stream: bool = False
     format: str | None = None
     response_format: str | None = None
@@ -147,7 +149,16 @@ class GenerateRequest(BaseModel):
     keep_alive: str | None = None
     preferred_model: str | None = None
     # KV-Cache-Reuse: gleiche session_id → reset=False → nur neue Token werden verarbeitet
-    session_id: str | None = None
+    session_id: str | None = Field(default=None, max_length=config.MAX_SESSION_ID_LENGTH)
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+            raise ValueError("session_id contains invalid characters")
+        return value
 
 
 class GenerateResponse(BaseModel):
@@ -327,7 +338,19 @@ async def generate(request: GenerateRequest, http_request: Request) -> Streaming
             request_id,
         )
 
-    model_name = select_model_for_prompt(request.prompt, request.preferred_model or request.model)
+    try:
+        requested_model = request.preferred_model if request.preferred_model is not None else request.model
+        model_name = select_model_for_prompt(request.prompt, requested_model)
+    except ValueError as exc:
+        metrics.record_error()
+        raise _http_error(
+            422,
+            ErrorCode.INVALID_REQUEST,
+            "Invalid model name",
+            False,
+            request_id,
+        ) from exc
+
     _queue_depth += 1
     start_ns = time.perf_counter_ns()
 
@@ -348,6 +371,15 @@ async def generate(request: GenerateRequest, http_request: Request) -> Streaming
             ErrorCode.MODEL_NOT_FOUND,
             "Model is not available",
             False,
+            request_id,
+        ) from exc
+    except asyncio.TimeoutError as exc:
+        metrics.record_error()
+        raise _http_error(
+            504,
+            ErrorCode.INFERENCE_TIMEOUT,
+            "Inference timed out",
+            True,
             request_id,
         ) from exc
     except HTTPException:
@@ -371,7 +403,9 @@ async def _blocking_generate(
     model_name: str,
     start_ns: int,
 ) -> GenerateResponse:
-    prompt = _json_prompt(request.prompt, request.required_json_keys) if _wants_json_response(request) else request.prompt
+    wants_json = _wants_json_response(request)
+    grammar = build_json_grammar(request.required_json_keys) if wants_json else None
+    prompt = _json_prompt(request.prompt, request.required_json_keys) if wants_json else request.prompt
     result = await manager.generate(
         model_name=model_name,
         prompt=prompt,
@@ -380,6 +414,7 @@ async def _blocking_generate(
         top_p=request.top_p,
         stop=request.stop,
         session_id=request.session_id,
+        grammar=grammar,
     )
 
     elapsed_ns = time.perf_counter_ns() - start_ns
@@ -387,10 +422,25 @@ async def _blocking_generate(
     tokens = result.get("usage", {}).get("completion_tokens", 0)
     response_text = choice.get("text", "")
 
-    if _wants_json_response(request):
+    if wants_json:
         try:
             response_text = _normalize_json_response(response_text, request.required_json_keys)
         except ValueError:
+            if grammar is not None:
+                # Grammar war aktiv — invalides JSON sollte unmöglich sein
+                logger.error(
+                    "grammar-constrained output failed normalization: %r", response_text
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=_error_payload(
+                        ErrorCode.INFERENCE_FAILED,
+                        "Grammar-constrained output is not valid JSON",
+                        True,
+                        "",
+                    ),
+                )
+            # Grammar nicht verfügbar: Repair-Retry (Fallback)
             repair = await manager.generate(
                 model_name=model_name,
                 prompt=_repair_json_prompt(response_text, request.required_json_keys),
@@ -430,6 +480,7 @@ async def _stream_generate(
     global _queue_depth
     token_count = 0
     try:
+        grammar = build_json_grammar(request.required_json_keys) if _wants_json_response(request) else None
         async with manager.semaphore:
             async for token in manager.stream_generate(
                 model_name=model_name,
@@ -439,6 +490,7 @@ async def _stream_generate(
                 top_p=request.top_p,
                 stop=request.stop,
                 session_id=request.session_id,
+                grammar=grammar,
             ):
                 token_count += 1
                 yield (json.dumps({"model": model_name, "response": token, "done": False}) + "\n").encode()

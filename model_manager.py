@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -13,7 +13,11 @@ from config import (
     DEFAULT_MODEL,
     FAST_MODEL,
     FAST_MODEL_ALIASES,
+    INFERENCE_TIMEOUT_LARGE,
+    INFERENCE_TIMEOUT_SMALL,
     KEEP_ALIVE_TIMEOUT,
+    KV_CACHE_TYPE_K,
+    KV_CACHE_TYPE_V,
     LARGE_MODEL_KEYWORDS,
     LARGE_MODEL,
     FLASH_ATTN,
@@ -58,28 +62,80 @@ def _is_large_model(model_name: str) -> bool:
     return any(m in lower for m in _LARGE_SIZE_MARKERS)
 
 
+def _inference_timeout(model_name: str) -> int:
+    return INFERENCE_TIMEOUT_LARGE if _is_large_model(model_name) else INFERENCE_TIMEOUT_SMALL
+
+
+def validate_model_name(model_name: str) -> str:
+    """Accept only GGUF basenames, never paths."""
+    if model_name != model_name.strip():
+        raise ValueError("Invalid model name")
+    if not model_name or model_name in {".", ".."}:
+        raise ValueError("Invalid model name")
+    if "/" in model_name or "\\" in model_name:
+        raise ValueError("Invalid model name")
+    if Path(model_name).name != model_name:
+        raise ValueError("Invalid model name")
+    if not model_name.lower().endswith(".gguf"):
+        raise ValueError("Invalid model name")
+    return model_name
+
+
+def resolve_model_path(model_name: str, models_dir: str | None = None) -> Path:
+    safe_name = validate_model_name(model_name)
+    base = Path(models_dir or MODELS_DIR).resolve()
+    candidate = (base / safe_name).resolve(strict=False)
+    try:
+        candidate.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("Invalid model path") from exc
+    return candidate
+
+
 def _is_recoverable_generation_error(exc: Exception) -> bool:
     text = str(exc).lower()
+    if isinstance(exc, RuntimeError) and "llama_decode returned" in text:
+        return True
     return isinstance(exc, ValueError) and (
         "could not broadcast input array" in text
         or "shape mismatch" in text
     )
 
 
+def build_json_grammar(required_keys: list[str] | None) -> "Any | None":
+    """Erstellt eine LlamaGrammar die JSON-Output auf required_keys constraint.
+
+    Gibt None zurück wenn LlamaGrammar nicht verfügbar ist (defensiv gegen API-Änderungen).
+    """
+    try:
+        from llama_cpp import LlamaGrammar
+    except ImportError:
+        return None
+    import json as _json
+    schema: dict = {"type": "object"}
+    if required_keys:
+        schema["properties"] = {k: {} for k in required_keys}
+        schema["required"] = list(required_keys)
+    try:
+        return LlamaGrammar.from_json_schema(_json.dumps(schema), verbose=False)
+    except Exception:
+        return None
+
+
 def select_model_for_prompt(prompt: str, preferred_model: str | None = None) -> str:
     """Wählt Modell anhand Alias, explizitem Modell oder Prompt-Keywords."""
-    if preferred_model:
+    if preferred_model is not None:
         if preferred_model.lower() in FAST_MODEL_ALIASES:
-            return FAST_MODEL
+            return validate_model_name(FAST_MODEL)
         if preferred_model.lower() == "default":
-            return DEFAULT_MODEL
+            return validate_model_name(DEFAULT_MODEL)
         if preferred_model.lower() == "large":
-            return LARGE_MODEL
-        return preferred_model
+            return validate_model_name(LARGE_MODEL)
+        return validate_model_name(preferred_model)
     prompt_lower = prompt.lower()
     if any(kw in prompt_lower for kw in LARGE_MODEL_KEYWORDS):
-        return LARGE_MODEL
-    return DEFAULT_MODEL
+        return validate_model_name(LARGE_MODEL)
+    return validate_model_name(DEFAULT_MODEL)
 
 
 # ── KV-Cache-fähiger Generate-Wrapper ────────────────────────────────────────
@@ -92,6 +148,7 @@ def _generate_with_cache(
     top_p: float,
     stop: list[str],
     reset: bool,
+    grammar: "Any | None" = None,
 ) -> dict:
     """Ruft llm.generate() direkt auf, um reset=False zu unterstützen.
 
@@ -107,7 +164,7 @@ def _generate_with_cache(
     finish_reason = "length"
     accumulated = b""
 
-    for token in llm.generate(prompt_tokens, temp=temperature, top_p=top_p, reset=reset):
+    for token in llm.generate(prompt_tokens, temp=temperature, top_p=top_p, reset=reset, grammar=grammar):
         if llama_cpp.llama_vocab_is_eog(llm._model.vocab, token):
             finish_reason = "stop"
             break
@@ -147,25 +204,30 @@ def _stream_with_cache(
     reset: bool,
     token_queue: "asyncio.Queue[StreamItem]",
     loop: asyncio.AbstractEventLoop,
+    grammar: "Any | None" = None,
 ) -> None:
     """Synchrone Streaming-Variante für run_in_executor.
 
-    Sendet decodierte Token-Strings in die Queue; None = Sentinel.
+    Sendet decodierte Token-Deltas in die Queue; None = Sentinel.
+    Jeder Chunk enthält nur den neuen Teil seit dem letzten Token (O(n) statt O(n²)).
     """
     import llama_cpp
 
     prompt_tokens = llm.tokenize(prompt.encode("utf-8"), add_bos=True, special=True)
     stop_bytes = [s.encode("utf-8") for s in stop if s]
     completion_tokens: list[int] = []
+    prev_len = 0
 
     try:
-        for token in llm.generate(prompt_tokens, temp=temperature, top_p=top_p, reset=reset):
+        for token in llm.generate(prompt_tokens, temp=temperature, top_p=top_p, reset=reset, grammar=grammar):
             if llama_cpp.llama_vocab_is_eog(llm._model.vocab, token):
                 break
             completion_tokens.append(token)
             accumulated = llm.detokenize(completion_tokens)
-            text = accumulated.decode("utf-8", errors="replace")
-            loop.call_soon_threadsafe(token_queue.put_nowait, text)
+            new_bytes = accumulated[prev_len:]
+            if new_bytes:
+                loop.call_soon_threadsafe(token_queue.put_nowait, new_bytes.decode("utf-8", errors="replace"))
+                prev_len = len(accumulated)
             if any(sb in accumulated for sb in stop_bytes) or len(completion_tokens) >= max_tokens:
                 break
     except Exception as exc:
@@ -194,9 +256,15 @@ class LlamaModelDraft:
         **kwargs: Any,
     ) -> "npt.NDArray[np.intc]":
         num_pred = kwargs.get("num_pred_tokens", 5)
+        ids = input_ids.tolist()
+        # Truncate to draft context window — leaves room for draft tokens themselves.
+        # Always reset=True: safer than reset=False because after target rejection the
+        # input sequence may not be a superset of the cached state, causing corrupt decode.
+        max_input = self._draft.n_ctx() - num_pred - 1
+        if len(ids) > max_input:
+            ids = ids[-max_input:]
         draft_tokens: list[int] = []
-        # temp=0.0 (greedy) für maximale Akzeptanzrate beim Target
-        for token in self._draft.generate(input_ids.tolist(), reset=False, temp=0.0):
+        for token in self._draft.generate(ids, reset=True, temp=0.0):
             draft_tokens.append(token)
             if len(draft_tokens) >= num_pred:
                 break
@@ -265,8 +333,8 @@ class ModelManager:
     def _load(self, model_name: str) -> "Llama":
         from llama_cpp import Llama
 
-        path = os.path.join(MODELS_DIR, model_name)
-        if not os.path.isfile(path):
+        path = resolve_model_path(model_name)
+        if not path.is_file():
             raise FileNotFoundError(f"Modelldatei nicht gefunden: {path}")
 
         large = _is_large_model(model_name)
@@ -279,10 +347,10 @@ class ModelManager:
             try:
                 from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
                 if large and SPECULATIVE_DRAFT_MODEL:
-                    draft_path = os.path.join(MODELS_DIR, SPECULATIVE_DRAFT_MODEL)
-                    if os.path.isfile(draft_path):
+                    draft_path = resolve_model_path(SPECULATIVE_DRAFT_MODEL)
+                    if draft_path.is_file():
                         draft_llm = Llama(
-                            model_path=draft_path,
+                            model_path=str(draft_path),
                             n_ctx=N_CTX_SMALL,
                             n_threads=N_THREADS,
                             n_threads_batch=N_THREADS_BATCH,
@@ -329,8 +397,14 @@ class ModelManager:
             MLOCK,
             draft_model is not None,
         )
+        kv_kwargs: dict = {}
+        if KV_CACHE_TYPE_K != 0:
+            kv_kwargs["type_k"] = KV_CACHE_TYPE_K
+        if KV_CACHE_TYPE_V != 0:
+            kv_kwargs["type_v"] = KV_CACHE_TYPE_V
+
         return Llama(
-            model_path=path,
+            model_path=str(path),
             n_ctx=n_ctx,
             n_threads=N_THREADS,
             n_threads_batch=N_THREADS_BATCH,
@@ -341,6 +415,7 @@ class ModelManager:
             use_mlock=MLOCK,
             verbose=False,
             draft_model=draft_model,
+            **kv_kwargs,
         )
 
     # ── Session KV-Cache ──────────────────────────────────────────────────────
@@ -387,9 +462,13 @@ class ModelManager:
     def _cache_hit(self, session_id: str | None, model_name: str) -> bool:
         return session_id is not None and self._is_session_valid(session_id, model_name)
 
-    async def _drain_stream_queue(self, queue: "asyncio.Queue[StreamItem]") -> AsyncGenerator[str, None]:
+    async def _drain_stream_queue(
+        self,
+        queue: "asyncio.Queue[StreamItem]",
+        timeout: float,
+    ) -> AsyncGenerator[str, None]:
         while True:
-            item = await queue.get()
+            item = await asyncio.wait_for(queue.get(), timeout=timeout)
             if item is None:
                 break
             if isinstance(item, Exception):
@@ -405,15 +484,29 @@ class ModelManager:
         top_p: float,
         stop: list[str],
         session_id: str | None = None,
+        grammar: "Any | None" = None,
     ) -> dict:
         llm = await self.get(model_name)
         cache_hit = self._cache_hit(session_id, model_name)
         reset = not cache_hit
+        if grammar is not None:
+            reset = True  # Grammar-State lebt nicht im KV-Cache
         self._set_state(model_name, ModelState.GENERATING)
+        timeout = _inference_timeout(model_name)
         try:
-            result = await asyncio.to_thread(
-                _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, reset,
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, reset, grammar,
+                ),
+                timeout=timeout,
             )
+        except asyncio.TimeoutError:
+            logger.error(
+                "inference timeout after %ds: model=%s session=%s",
+                timeout, model_name, session_id or "-",
+            )
+            await self._invalidate_model_state(model_name)
+            raise
         except Exception as exc:
             if not _is_recoverable_generation_error(exc):
                 raise
@@ -427,15 +520,18 @@ class ModelManager:
             )
             await self._invalidate_model_state(model_name)
             llm = await self.get(model_name)
-            result = await asyncio.to_thread(
-                _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, True,
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _generate_with_cache, llm, prompt, max_tokens, temperature, top_p, stop, True, grammar,
+                ),
+                timeout=timeout,
             )
             cache_hit = False
         finally:
             if model_name in self._instances:
                 self._set_state(model_name, ModelState.READY)
 
-        if session_id is not None:
+        if session_id is not None and grammar is None:
             await self._touch_session(session_id, model_name)
         result["airpi"] = {"cache_hit": cache_hit}
 
@@ -455,13 +551,17 @@ class ModelManager:
         top_p: float,
         stop: list[str],
         session_id: str | None = None,
+        grammar: "Any | None" = None,
     ) -> AsyncGenerator[str, None]:
         llm = await self.get(model_name)
         cache_hit = self._cache_hit(session_id, model_name)
         reset = not cache_hit
+        if grammar is not None:
+            reset = True
         self._set_state(model_name, ModelState.GENERATING)
+        timeout = _inference_timeout(model_name)
 
-        if session_id is not None:
+        if session_id is not None and grammar is None:
             await self._touch_session(session_id, model_name)
 
         yielded = False
@@ -471,13 +571,20 @@ class ModelManager:
             worker = asyncio.create_task(
                 asyncio.to_thread(
                     _stream_with_cache,
-                    llm, prompt, max_tokens, temperature, top_p, stop, reset, queue, loop,
+                    llm, prompt, max_tokens, temperature, top_p, stop, reset, queue, loop, grammar,
                 )
             )
-            async for token in self._drain_stream_queue(queue):
+            async for token in self._drain_stream_queue(queue, timeout):
                 yielded = True
                 yield token
             await worker
+        except asyncio.TimeoutError:
+            logger.error(
+                "stream timeout after %ds: model=%s session=%s",
+                timeout, model_name, session_id or "-",
+            )
+            await self._invalidate_model_state(model_name)
+            raise
         except Exception as exc:
             if yielded or not _is_recoverable_generation_error(exc):
                 self._set_state(model_name, ModelState.FAILED, str(exc))
@@ -497,10 +604,10 @@ class ModelManager:
             worker = asyncio.create_task(
                 asyncio.to_thread(
                     _stream_with_cache,
-                    llm, prompt, max_tokens, temperature, top_p, stop, True, queue, loop,
+                    llm, prompt, max_tokens, temperature, top_p, stop, True, queue, loop, grammar,
                 )
             )
-            async for token in self._drain_stream_queue(queue):
+            async for token in self._drain_stream_queue(queue, timeout):
                 yield token
             await worker
         finally:

@@ -7,7 +7,13 @@ from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
-from model_manager import ModelManager, _is_recoverable_generation_error, select_model_for_prompt
+from model_manager import (
+    ModelManager,
+    _is_recoverable_generation_error,
+    resolve_model_path,
+    select_model_for_prompt,
+    validate_model_name,
+)
 
 
 class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
@@ -24,6 +30,35 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
 
     def test_select_model_keeps_explicit_model_name(self) -> None:
         self.assertEqual(select_model_for_prompt("short answer", "custom.gguf"), "custom.gguf")
+
+    def test_select_model_rejects_path_like_or_non_gguf_names(self) -> None:
+        invalid_names = [
+            "../secret.gguf",
+            "/tmp/model.gguf",
+            "nested/model.gguf",
+            "nested\\model.gguf",
+            "model.bin",
+            " model.gguf",
+            "",
+        ]
+
+        for invalid_name in invalid_names:
+            with self.subTest(invalid_name=invalid_name):
+                with self.assertRaises(ValueError):
+                    select_model_for_prompt("short answer", invalid_name)
+
+    def test_validate_model_name_accepts_plain_gguf_basename(self) -> None:
+        self.assertEqual(validate_model_name("Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"), "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf")
+
+    def test_resolve_model_path_rejects_symlink_escape(self) -> None:
+        with TemporaryDirectory() as models_dir:
+            with TemporaryDirectory() as outside_dir:
+                outside_model = Path(outside_dir) / "outside.gguf"
+                outside_model.write_bytes(b"gguf")
+                (Path(models_dir) / "linked.gguf").symlink_to(outside_model)
+
+                with self.assertRaises(ValueError):
+                    resolve_model_path("linked.gguf", models_dir)
 
     def test_recoverable_generation_error_detection(self) -> None:
         self.assertTrue(
@@ -74,7 +109,7 @@ class RecoverableGenerationErrorTests(IsolatedAsyncioTestCase):
 
         calls = []
 
-        def fake_stream_with_cache(llm, prompt, max_tokens, temperature, top_p, stop, reset, queue, loop):
+        def fake_stream_with_cache(llm, prompt, max_tokens, temperature, top_p, stop, reset, queue, loop, grammar=None):
             calls.append((llm, reset))
             if len(calls) == 1:
                 loop.call_soon_threadsafe(

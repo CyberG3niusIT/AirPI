@@ -24,7 +24,7 @@ N_THREADS: int = int(os.environ.get("AIRPI_N_THREADS", "3"))
 
 # Context-Länge pro Modellgröße (kleiner = weniger RAM und schnellerer KV-Cache)
 N_CTX_SMALL: int = int(os.environ.get("AIRPI_N_CTX_SMALL", "2048"))
-N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "2048"))
+N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "4096"))
 
 # Prompt ingestion tuning. These values are conservative for Raspberry Pi 5
 # and can be overridden from /etc/airpi/airpi.env.
@@ -44,11 +44,28 @@ MLOCK: bool = os.environ.get("AIRPI_MLOCK", "false").lower() == "true"
 # Max. gleichzeitig ausstehende Generate-Requests
 MAX_QUEUE: int = int(os.environ.get("AIRPI_MAX_QUEUE", "10"))
 
+# Max. Prompt-Größe je Generate-Request. Begrenzung schützt vor versehentlicher
+# oder böswilliger Prefill-/RAM-Last, bevor llama.cpp überhaupt startet.
+MAX_PROMPT_CHARS: int = int(os.environ.get("AIRPI_MAX_PROMPT_CHARS", "24000"))
+
 # Sekunden ohne Nutzung bis Modell aus RAM entladen wird
 KEEP_ALIVE_TIMEOUT: int = int(os.environ.get("AIRPI_KEEP_ALIVE_TIMEOUT", "900"))  # 15 min
 
 # Sekunden bis eine inaktive Session aus dem Cache entfernt wird
 SESSION_TTL: int = int(os.environ.get("AIRPI_SESSION_TTL", "1800"))  # 30 min
+
+# Session-IDs sind clientgewählte Cache-Schlüssel. Kurz und restriktiv halten,
+# damit sie nicht zu Log-/Metric-Müll oder impliziten Pfaden werden.
+MAX_SESSION_ID_LENGTH: int = int(os.environ.get("AIRPI_MAX_SESSION_ID_LENGTH", "128"))
+
+# Sekunden bis eine laufende Inferenz als hängend gilt und abgebrochen wird.
+# Kleine Modelle: 120 s; große Modelle: 300 s
+INFERENCE_TIMEOUT_SMALL: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_SMALL", "120"))
+INFERENCE_TIMEOUT_LARGE: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_LARGE", "300"))
+
+# GGML-Typ für KV-Cache-Quantisierung. 0 = Default (F16), 8 = Q8_0 (~50% RAM)
+KV_CACHE_TYPE_K: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_K", "0"))
+KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "0"))
 
 # Speculative Decoding via prompt-lookup (n-gram, zero extra RAM) oder draft model
 SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "true"

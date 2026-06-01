@@ -6,6 +6,7 @@ from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
 import server
@@ -90,6 +91,46 @@ class ServerContractTests(IsolatedAsyncioTestCase):
         self.assertEqual(server.metrics.cache_hit_total, 1)
         self.assertEqual(server.metrics.tokens_total, 1)
 
+    async def test_generate_request_rejects_empty_or_too_large_prompt(self) -> None:
+        with self.assertRaises(ValidationError):
+            server.GenerateRequest(model="test.gguf", prompt="", stream=False)
+
+        with self.assertRaises(ValidationError):
+            server.GenerateRequest(
+                model="test.gguf",
+                prompt="x" * (server.config.MAX_PROMPT_CHARS + 1),
+                stream=False,
+            )
+
+    async def test_generate_request_rejects_invalid_session_id(self) -> None:
+        invalid_session_ids = [
+            "../cache",
+            "session with spaces",
+            "session/child",
+            "session\\child",
+            "session?",
+        ]
+
+        for session_id in invalid_session_ids:
+            with self.subTest(session_id=session_id):
+                with self.assertRaises(ValidationError):
+                    server.GenerateRequest(
+                        model="test.gguf",
+                        prompt="hello",
+                        stream=False,
+                        session_id=session_id,
+                    )
+
+    async def test_generate_request_accepts_safe_session_id(self) -> None:
+        request = server.GenerateRequest(
+            model="test.gguf",
+            prompt="hello",
+            stream=False,
+            session_id="router.client-1:session_42",
+        )
+
+        self.assertEqual(request.session_id, "router.client-1:session_42")
+
     async def test_generate_resolves_fast_lane_alias(self) -> None:
         payload = {
             "choices": [{"text": "fast", "finish_reason": "stop"}],
@@ -157,17 +198,18 @@ class ServerContractTests(IsolatedAsyncioTestCase):
             "choices": [{"text": "{\"decision\":\"allow\",\"risk\":\"low\",\"reason\":\"synthetic\"}", "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 8, "total_tokens": 11},
         }
-        with patch.object(server.manager, "generate", new=AsyncMock(side_effect=[first, second])) as generate:
-            response = await server.generate(
-                server.GenerateRequest(
-                    model="test.gguf",
-                    prompt="route",
-                    stream=False,
-                    response_format="json_object",
-                    required_json_keys=["decision", "risk", "reason"],
-                ),
-                DummyRequest(),
-            )
+        with patch("server.build_json_grammar", return_value=None):
+            with patch.object(server.manager, "generate", new=AsyncMock(side_effect=[first, second])) as generate:
+                response = await server.generate(
+                    server.GenerateRequest(
+                        model="test.gguf",
+                        prompt="route",
+                        stream=False,
+                        response_format="json_object",
+                        required_json_keys=["decision", "risk", "reason"],
+                    ),
+                    DummyRequest(),
+                )
 
         self.assertEqual(generate.await_count, 2)
         self.assertEqual(response.response, '{"decision":"allow","risk":"low","reason":"synthetic"}')
@@ -209,6 +251,43 @@ class ServerContractTests(IsolatedAsyncioTestCase):
         self.assertEqual(detail["message"], "Model is not available")
         self.assertFalse(detail["retryable"])
         self.assertIn("request_id", detail)
+
+    async def test_generate_rejects_path_like_model_name(self) -> None:
+        generate = AsyncMock()
+        with patch.object(server.manager, "generate", new=generate):
+            with self.assertRaises(HTTPException) as raised:
+                await server.generate(
+                    server.GenerateRequest(model="../secret.gguf", prompt="hello", stream=False),
+                    DummyRequest(),
+                )
+
+        detail = raised.exception.detail["error"]
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(detail["code"], server.ErrorCode.INVALID_REQUEST)
+        self.assertEqual(detail["message"], "Invalid model name")
+        self.assertFalse(detail["retryable"])
+        self.assertEqual(server._queue_depth, 0)
+        generate.assert_not_awaited()
+
+    async def test_generate_rejects_path_like_preferred_model_name(self) -> None:
+        generate = AsyncMock()
+        with patch.object(server.manager, "generate", new=generate):
+            with self.assertRaises(HTTPException) as raised:
+                await server.generate(
+                    server.GenerateRequest(
+                        model="default.gguf",
+                        preferred_model="/tmp/secret.gguf",
+                        prompt="hello",
+                        stream=False,
+                    ),
+                    DummyRequest(),
+                )
+
+        detail = raised.exception.detail["error"]
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(detail["code"], server.ErrorCode.INVALID_REQUEST)
+        self.assertEqual(server._queue_depth, 0)
+        generate.assert_not_awaited()
 
     async def test_queue_full_error_contract(self) -> None:
         server._queue_depth = server.config.MAX_QUEUE
