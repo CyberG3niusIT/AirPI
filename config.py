@@ -65,10 +65,11 @@ INFERENCE_TIMEOUT_SMALL: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_SMALL
 INFERENCE_TIMEOUT_LARGE: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_LARGE", "300"))
 
 # GGML-Typ für KV-Cache-Quantisierung.
-# 0 = F16 (Standard), 8 = Q8_0 (~50% weniger RAM, nahezu kein Qualitätsverlust)
-# Pi 5: Q8 empfohlen — halbiert KV-RAM, erlaubt längere Sessions ohne Paging-Overhead
-KV_CACHE_TYPE_K: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_K", "8"))
-KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "8"))
+# 0 = F16 (Standard, kompatibel mit allen Modellen)
+# 8 = Q8_0 (~50% weniger RAM) — NUR für Modelle ohne i-Quant (i1/i2/i3) verwenden,
+#     da llama_decode bei i-Quant + Q8-KV RuntimeError zurückgibt.
+KV_CACHE_TYPE_K: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_K", "0"))
+KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "0"))
 
 # Speculative Decoding via prompt-lookup (n-gram, zero extra RAM) oder draft model
 SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "true"
