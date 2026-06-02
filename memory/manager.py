@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import date
@@ -24,6 +25,48 @@ CREATE TABLE IF NOT EXISTS memories (
     category TEXT DEFAULT 'fact',
     created_at REAL NOT NULL,
     active INTEGER DEFAULT 1
+);
+"""
+
+_GRAPH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS graph_manual_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_key TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    source_label TEXT DEFAULT '',
+    target_label TEXT DEFAULT '',
+    relation_type TEXT DEFAULT 'manual',
+    label TEXT DEFAULT '',
+    directed INTEGER DEFAULT 1,
+    weight INTEGER DEFAULT 1,
+    confidence INTEGER DEFAULT 80,
+    note TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS graph_edge_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    edge_key TEXT NOT NULL,
+    action TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    active INTEGER DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(edge_key, action)
+);
+
+CREATE TABLE IF NOT EXISTS graph_manual_nodes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_key    TEXT    NOT NULL UNIQUE,
+    label       TEXT    NOT NULL,
+    type        TEXT    DEFAULT 'concept',
+    note        TEXT    DEFAULT '',
+    confidence  INTEGER DEFAULT 80,
+    active      INTEGER DEFAULT 1,
+    created_at  REAL    NOT NULL,
+    updated_at  REAL    NOT NULL
 );
 """
 
@@ -50,9 +93,33 @@ _CATEGORY_ORDER = ["fact", "preference", "correction", "project", "system", "tod
 # QW-6: Maximale Anzahl Einträge in memory.md
 MEMORY_MD_MAX_ENTRIES = int(os.environ.get("MEMORY_MD_MAX_ENTRIES", "50"))
 
+_VALID_GRAPH_OVERRIDE_ACTIONS = {"hide"}
+
+_VALID_NODE_TYPES: frozenset[str] = frozenset({
+    "person", "place", "tech", "date", "concept"
+})
+
 
 def _today() -> str:
     return date.today().isoformat()
+
+
+def _normalize_graph_key(value: str) -> str:
+    """Stable, display-independent graph key for persisted overlays."""
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _edge_row_to_dict(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    data["directed"] = bool(data.get("directed", 1))
+    data["active"] = bool(data.get("active", 1))
+    return data
+
+
+def _node_row_to_dict(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    data["active"] = bool(data.get("active", 1))
+    return data
 
 
 def _score(entry: dict) -> float:
@@ -121,6 +188,7 @@ class MemoryManager:
         try:
             conn = self._connect()
             conn.execute(_SCHEMA)
+            conn.executescript(_GRAPH_SCHEMA)
             conn.commit()
         except Exception:
             logger.exception("memory: DB init failed — memory disabled for this session")
@@ -292,6 +360,307 @@ class MemoryManager:
         except Exception:
             logger.exception("memory: all_active failed")
             return []
+
+    # ── Graph overlays ───────────────────────────────────────────────────────
+
+    def list_manual_edges(self, include_inactive: bool = False) -> list[dict]:
+        """Returns persisted user-managed graph edges."""
+        try:
+            conn = self._connect()
+            where = "" if include_inactive else "WHERE active = 1"
+            cur = conn.execute(
+                f"SELECT * FROM graph_manual_edges {where} ORDER BY created_at ASC"
+            )
+            return [_edge_row_to_dict(row) for row in cur.fetchall()]
+        except Exception:
+            logger.exception("memory: list_manual_edges failed")
+            return []
+
+    def add_manual_edge(
+        self,
+        source_key: str,
+        target_key: str,
+        source_label: str = "",
+        target_label: str = "",
+        relation_type: str = "manual",
+        label: str = "",
+        directed: bool = True,
+        confidence: int = 80,
+        note: str = "",
+    ) -> Optional[dict]:
+        """Persists a manual graph edge without mutating auto-generated graph data."""
+        source_key = _normalize_graph_key(source_key)
+        target_key = _normalize_graph_key(target_key)
+        relation_type = _normalize_graph_key(relation_type or "manual") or "manual"
+        if not source_key or not target_key or source_key == target_key:
+            return None
+        confidence = max(0, min(100, int(confidence)))
+        now = time.time()
+        cur = self._execute(
+            """
+            INSERT INTO graph_manual_edges (
+                source_key, target_key, source_label, target_label,
+                relation_type, label, directed, weight, confidence, note,
+                active, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 1, ?, ?)
+            """,
+            (
+                source_key,
+                target_key,
+                source_label.strip(),
+                target_label.strip(),
+                relation_type,
+                label.strip(),
+                1 if directed else 0,
+                confidence,
+                note.strip(),
+                now,
+                now,
+            ),
+        )
+        if not cur:
+            return None
+        return self.get_manual_edge(int(cur.lastrowid))
+
+    def get_manual_edge(self, edge_id: int) -> Optional[dict]:
+        try:
+            conn = self._connect()
+            cur = conn.execute("SELECT * FROM graph_manual_edges WHERE id = ?", (edge_id,))
+            row = cur.fetchone()
+            return _edge_row_to_dict(row) if row else None
+        except Exception:
+            logger.exception("memory: get_manual_edge failed")
+            return None
+
+    def update_manual_edge(self, edge_id: int, updates: dict) -> Optional[dict]:
+        """Updates mutable manual-edge fields and returns the updated edge."""
+        allowed = {
+            "relation_type",
+            "label",
+            "directed",
+            "confidence",
+            "note",
+            "source_label",
+            "target_label",
+        }
+        fields: list[str] = []
+        values: list = []
+        for key, value in updates.items():
+            if key not in allowed or value is None:
+                continue
+            if key == "relation_type":
+                value = _normalize_graph_key(str(value) or "manual") or "manual"
+            elif key in {"label", "note", "source_label", "target_label"}:
+                value = str(value).strip()
+            elif key == "directed":
+                value = 1 if bool(value) else 0
+            elif key == "confidence":
+                value = max(0, min(100, int(value)))
+            fields.append(f"{key} = ?")
+            values.append(value)
+        if not fields:
+            return self.get_manual_edge(edge_id)
+        fields.append("updated_at = ?")
+        values.append(time.time())
+        values.append(edge_id)
+        cur = self._execute(
+            f"UPDATE graph_manual_edges SET {', '.join(fields)} WHERE id = ?",
+            tuple(values),
+        )
+        if not cur or cur.rowcount == 0:
+            return None
+        return self.get_manual_edge(edge_id)
+
+    def delete_manual_edge(self, edge_id: int) -> bool:
+        """Soft-deletes a manual edge."""
+        cur = self._execute(
+            "UPDATE graph_manual_edges SET active = 0, updated_at = ? WHERE id = ? AND active = 1",
+            (time.time(), edge_id),
+        )
+        return bool(cur and cur.rowcount > 0)
+
+    def list_edge_overrides(self, include_inactive: bool = False) -> list[dict]:
+        """Returns active graph-edge overrides such as hidden auto edges."""
+        try:
+            conn = self._connect()
+            where = "" if include_inactive else "WHERE active = 1"
+            cur = conn.execute(
+                f"SELECT * FROM graph_edge_overrides {where} ORDER BY created_at ASC"
+            )
+            return [dict(row) for row in cur.fetchall()]
+        except Exception:
+            logger.exception("memory: list_edge_overrides failed")
+            return []
+
+    def hide_auto_edge(self, edge_key: str, note: str = "") -> Optional[dict]:
+        """Marks an auto-generated graph edge as hidden at render time."""
+        edge_key = edge_key.strip()
+        if not edge_key:
+            return None
+        now = time.time()
+        cur = self._execute(
+            """
+            INSERT INTO graph_edge_overrides (edge_key, action, note, active, created_at, updated_at)
+            VALUES (?, 'hide', ?, 1, ?, ?)
+            ON CONFLICT(edge_key, action) DO UPDATE SET
+                note = excluded.note,
+                active = 1,
+                updated_at = excluded.updated_at
+            """,
+            (edge_key, note.strip(), now, now),
+        )
+        if not cur:
+            return None
+        return self.get_edge_override(edge_key, "hide")
+
+    def get_edge_override(self, edge_key: str, action: str) -> Optional[dict]:
+        if action not in _VALID_GRAPH_OVERRIDE_ACTIONS:
+            return None
+        try:
+            conn = self._connect()
+            cur = conn.execute(
+                "SELECT * FROM graph_edge_overrides WHERE edge_key = ? AND action = ?",
+                (edge_key, action),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except Exception:
+            logger.exception("memory: get_edge_override failed")
+            return None
+
+    def clear_edge_override(self, edge_key: str, action: str = "hide") -> bool:
+        if action not in _VALID_GRAPH_OVERRIDE_ACTIONS:
+            return False
+        cur = self._execute(
+            """
+            UPDATE graph_edge_overrides
+            SET active = 0, updated_at = ?
+            WHERE edge_key = ? AND action = ? AND active = 1
+            """,
+            (time.time(), edge_key.strip(), action),
+        )
+        return bool(cur and cur.rowcount > 0)
+
+    # ── Manual node CRUD ─────────────────────────────────────────────────────────
+
+    def add_manual_node(
+        self,
+        label: str,
+        type: str = "concept",
+        note: str = "",
+        confidence: int = 80,
+    ) -> Optional[dict]:
+        """Persistiert einen manuellen Graph-Knoten.
+
+        Upsert-Verhalten: wenn ein Knoten mit gleichem node_key bereits existiert
+        (auch soft-deleted), wird er reaktiviert und aktualisiert.
+        Gibt die gespeicherte Row zurück oder None bei Fehler.
+        """
+        label = label.strip()
+        if not label:
+            return None
+        node_key = _normalize_graph_key(label)
+        if not node_key:
+            return None
+        if type not in _VALID_NODE_TYPES:
+            type = "concept"
+        confidence = max(0, min(100, int(confidence)))
+        now = time.time()
+        cur = self._execute(
+            """
+            INSERT INTO graph_manual_nodes
+                (node_key, label, type, note, confidence, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(node_key) DO UPDATE SET
+                label      = excluded.label,
+                type       = excluded.type,
+                note       = excluded.note,
+                confidence = excluded.confidence,
+                active     = 1,
+                updated_at = excluded.updated_at
+            """,
+            (node_key, label, type, note.strip(), confidence, now, now),
+        )
+        if not cur:
+            return None
+        return self.get_manual_node(int(cur.lastrowid))
+
+    def get_manual_node(self, node_id: int) -> Optional[dict]:
+        """Gibt einen manuellen Knoten per ID zurück (aktiv oder inaktiv)."""
+        try:
+            conn = self._connect()
+            cur = conn.execute(
+                "SELECT * FROM graph_manual_nodes WHERE id = ?", (node_id,)
+            )
+            row = cur.fetchone()
+            return _node_row_to_dict(row) if row else None
+        except Exception:
+            logger.exception("memory: get_manual_node failed")
+            return None
+
+    def list_manual_nodes(self, include_inactive: bool = False) -> list[dict]:
+        """Gibt persistierte manuelle Graph-Knoten zurück."""
+        try:
+            conn = self._connect()
+            where = "" if include_inactive else "WHERE active = 1"
+            cur = conn.execute(
+                f"SELECT * FROM graph_manual_nodes {where} ORDER BY created_at ASC"
+            )
+            return [_node_row_to_dict(row) for row in cur.fetchall()]
+        except Exception:
+            logger.exception("memory: list_manual_nodes failed")
+            return []
+
+    def update_manual_node(self, node_id: int, updates: dict) -> Optional[dict]:
+        """Aktualisiert veränderbare Felder eines manuellen Knotens.
+
+        Erlaubte Keys: label, type, note, confidence.
+        Gibt die aktualisierte Row zurück oder None wenn nicht gefunden.
+        """
+        allowed = {"label", "type", "note", "confidence"}
+        fields: list[str] = []
+        values: list = []
+        for key, value in updates.items():
+            if key not in allowed or value is None:
+                continue
+            if key == "label":
+                value = str(value).strip()
+                if not value:
+                    continue
+            elif key == "type":
+                value = str(value).strip()
+                if value not in _VALID_NODE_TYPES:
+                    value = "concept"
+            elif key == "note":
+                value = str(value).strip()
+            elif key == "confidence":
+                value = max(0, min(100, int(value)))
+            fields.append(f"{key} = ?")
+            values.append(value)
+        if not fields:
+            return self.get_manual_node(node_id)
+        fields.append("updated_at = ?")
+        values.append(time.time())
+        values.append(node_id)
+        cur = self._execute(
+            f"UPDATE graph_manual_nodes SET {', '.join(fields)} WHERE id = ? AND active = 1",
+            tuple(values),
+        )
+        if not cur or cur.rowcount == 0:
+            return None
+        return self.get_manual_node(node_id)
+
+    def delete_manual_node(self, node_id: int) -> bool:
+        """Soft-löscht einen manuellen Knoten (setzt active=0).
+
+        Gibt True zurück wenn ein aktiver Knoten gefunden und deaktiviert wurde.
+        """
+        cur = self._execute(
+            "UPDATE graph_manual_nodes SET active = 0, updated_at = ? WHERE id = ? AND active = 1",
+            (time.time(), node_id),
+        )
+        return bool(cur and cur.rowcount > 0)
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

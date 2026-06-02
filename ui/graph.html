@@ -54,6 +54,35 @@
     }
     #stats span { color: #9ca3af; font-weight: 500; }
 
+    #mode-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .mode-btn {
+      height: 28px;
+      min-width: 34px;
+      background: #111827;
+      border: 1px solid #293241;
+      border-radius: 6px;
+      color: #9ca3af;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .mode-btn:hover {
+      border-color: #64748b;
+      color: #e5e7eb;
+    }
+    .mode-btn.active {
+      background: #26331e;
+      border-color: #a3e635;
+      color: #d9f99d;
+    }
+
     /* ── Search ──────────────────────────────────────────────── */
     #search-wrap {
       flex: 1;
@@ -198,6 +227,7 @@
       align-items: center;
       padding: 0 16px;
       z-index: 100;
+      gap: 12px;
     }
 
     #btn-svg-export {
@@ -215,19 +245,52 @@
       color: #a3e635;
     }
 
+    #graph-status {
+      min-width: 0;
+      color: #6b7280;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     /* ── Links / Nodes ───────────────────────────────────────── */
     .link {
-      stroke: rgba(156, 163, 175, 0.35);
       stroke-linecap: round;
       transition: stroke 0.2s, stroke-opacity 0.2s;
     }
+    .link.undirected { stroke: rgba(156, 163, 175, 0.25); }
+    .link.directed   { stroke: rgba(163, 230, 53, 0.55); }
+    .link.manual {
+      stroke: rgba(251, 191, 36, 0.78) !important;
+      stroke-dasharray: 5 4;
+    }
+    .link.mixed {
+      stroke: rgba(45, 212, 191, 0.82) !important;
+    }
+    .link-hit {
+      stroke: transparent;
+      stroke-width: 14;
+      pointer-events: stroke;
+      cursor: pointer;
+    }
     .link.highlighted {
-      stroke: rgba(163, 230, 53, 0.7);
+      stroke: rgba(163, 230, 53, 0.9) !important;
       stroke-opacity: 1;
     }
     .link.dimmed {
-      stroke-opacity: 0.06;
+      stroke-opacity: 0.05 !important;
     }
+
+    .link-label {
+      font-size: 9px;
+      fill: #6b7280;
+      pointer-events: none;
+      user-select: none;
+      transition: opacity 0.2s;
+    }
+    .link-label.dimmed { opacity: 0.05; }
+    .link-label.highlighted { fill: #a3e635; opacity: 1; }
 
     .node circle {
       cursor: pointer;
@@ -239,16 +302,21 @@
     .node.highlighted circle {
       filter: brightness(1.4) drop-shadow(0 0 8px #a3e635);
     }
-    .node.dimmed circle {
-      opacity: 0.18;
+    .node.pending-link circle {
+      stroke: #fbbf24;
+      stroke-width: 3px;
+      filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.65));
     }
-    .node.dimmed text {
+    .node.dimmed circle {
       opacity: 0.12;
     }
+    .node.dimmed text {
+      opacity: 0.08;
+    }
 
-    /* QW-8: search dim/highlight */
-    .node.search-dim circle { opacity: 0.2; }
-    .node.search-dim text   { opacity: 0.2; }
+    /* Search dim/highlight */
+    .node.search-dim circle { opacity: 0.15; }
+    .node.search-dim text   { opacity: 0.12; }
     .node.search-match circle { opacity: 1.0; }
     .node.search-match text   { opacity: 1.0; }
 
@@ -260,6 +328,34 @@
       text-anchor: middle;
       user-select: none;
       transition: opacity 0.2s;
+    }
+
+    /* ── Legend ──────────────────────────────────────────────── */
+    #legend {
+      position: fixed;
+      bottom: 44px;
+      left: 12px;
+      background: rgba(15, 17, 23, 0.88);
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #6b7280;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 50;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
     }
 
     /* ── Tooltip ─────────────────────────────────────────────── */
@@ -317,9 +413,148 @@
       font-size: 14px;
     }
 
+    #edge-dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.58);
+      z-index: 300;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+    #edge-dialog-backdrop.open { display: flex; }
+    #edge-dialog {
+      width: min(440px, 100%);
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+      padding: 16px;
+    }
+    #edge-dialog h2 {
+      color: #e5e7eb;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .edge-endpoints {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+      color: #9ca3af;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .edge-endpoint {
+      min-width: 0;
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      padding: 7px 8px;
+      color: #d1d5db;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .edge-field {
+      display: grid;
+      gap: 5px;
+      margin-bottom: 10px;
+    }
+    .edge-field label {
+      color: #9ca3af;
+      font-size: 11px;
+    }
+    .edge-field input[type="text"],
+    .edge-field textarea {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #293241;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font: inherit;
+      font-size: 12px;
+      padding: 7px 8px;
+      outline: none;
+    }
+    .edge-field textarea {
+      min-height: 68px;
+      resize: vertical;
+    }
+    .edge-inline {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .edge-check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #d1d5db;
+      font-size: 12px;
+      min-height: 32px;
+    }
+    #edge-confidence-value {
+      color: #d9f99d;
+      font-variant-numeric: tabular-nums;
+    }
+    .edge-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    #edge-error {
+      display: none;
+      margin-top: 10px;
+      border: 1px solid #7f1d1d;
+      border-radius: 6px;
+      background: rgba(127, 29, 29, 0.18);
+      color: #fecaca;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 8px 10px;
+    }
+    #edge-error.visible { display: block; }
+    .edge-actions-right {
+      display: flex;
+      gap: 8px;
+    }
+    .edge-btn {
+      border: 1px solid #374151;
+      border-radius: 6px;
+      background: #1f2937;
+      color: #d1d5db;
+      font-size: 12px;
+      padding: 7px 12px;
+      cursor: pointer;
+    }
+    .edge-btn.primary {
+      border-color: #84cc16;
+      background: #26331e;
+      color: #d9f99d;
+    }
+    .edge-btn.danger {
+      border-color: #7f1d1d;
+      color: #fca5a5;
+    }
+    .edge-btn:hover { filter: brightness(1.12); }
+
     /* ── Small screens: sidebar below graph ─────────────────── */
     @media (max-width: 640px) {
       #main-layout { flex-direction: column; }
+      #topbar {
+        height: auto;
+        min-height: 44px;
+        flex-wrap: wrap;
+        padding: 8px 10px;
+      }
+      #main-layout { top: 88px; }
+      #search-wrap { order: 3; max-width: none; flex-basis: 100%; }
+      #stats { font-size: 11px; }
+      #refresh-indicator { display: none; }
       #sidebar {
         width: 100%;
         max-width: 100%;
@@ -332,12 +567,121 @@
       }
       #sidebar.open { transform: translateY(0); }
     }
+
+    /* ── Node Dialog ─────────────────────────────────────────────── */
+    #node-dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.58);
+      z-index: 300;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+    #node-dialog-backdrop.open { display: flex; }
+    #node-dialog {
+      width: min(380px, 100%);
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+      padding: 16px;
+    }
+    #node-dialog h2 {
+      color: #e5e7eb;
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .node-field {
+      display: grid;
+      gap: 5px;
+      margin-bottom: 10px;
+    }
+    .node-field label { color: #9ca3af; font-size: 11px; }
+    .node-field input[type="text"],
+    .node-field select,
+    .node-field textarea {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #293241;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font: inherit;
+      font-size: 12px;
+      padding: 7px 8px;
+      outline: none;
+    }
+    .node-field input[type="text"]:focus,
+    .node-field select:focus,
+    .node-field textarea:focus { border-color: #a3e635; }
+    .node-field select option { background: #111827; }
+    .node-field textarea { min-height: 55px; resize: vertical; }
+    #node-confidence-value { color: #d9f99d; font-variant-numeric: tabular-nums; }
+    .node-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .node-actions-right { display: flex; gap: 8px; }
+    #node-error {
+      display: none;
+      margin-top: 8px;
+      border: 1px solid #7f1d1d;
+      border-radius: 6px;
+      background: rgba(127, 29, 29, 0.18);
+      color: #fecaca;
+      font-size: 12px;
+      padding: 7px 10px;
+    }
+    #node-error.visible { display: block; }
+    #node-delete-confirm {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #fca5a5;
+      margin-top: 8px;
+    }
+    #node-delete-confirm.visible { display: flex; }
+
+    /* ── Node visual origin states ───────────────────────────────── */
+    .node.manual-node circle { stroke-dasharray: 6 3; }
+    .node.mixed-node circle {
+      filter: drop-shadow(0 0 5px rgba(45, 212, 191, 0.6));
+    }
+    .origin-badge {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .origin-badge.auto    { background: #1f2937; color: #6b7280; }
+    .origin-badge.manual  { background: #451a03; color: #fbbf24; }
+    .origin-badge.mixed   { background: #134e4a; color: #2dd4bf; }
+
+    /* Sidebar footer Bearbeiten-Button */
+    #sidebar-footer {
+      padding: 10px 16px;
+      border-top: 1px solid #1f2937;
+    }
   </style>
 </head>
 <body>
 
 <div id="topbar">
   <a id="back-link" href="/ui/index.html">&#8592; Chat</a>
+  <div id="mode-controls" role="group" aria-label="Graph-Modus">
+    <button class="mode-btn active" data-mode="explore" title="Erkunden">↗</button>
+    <button class="mode-btn" data-mode="connect" title="Verbinden">⛓</button>
+    <button class="mode-btn" data-mode="edit" title="Kanten bearbeiten">✎</button>
+    <button class="mode-btn" data-mode="node" title="Knoten verwalten">✦</button>
+  </div>
   <div id="search-wrap">
     <input type="text" id="graph-search" placeholder="Konzept suchen&#8230;" autocomplete="off" />
   </div>
@@ -367,11 +711,108 @@
     <div id="sidebar-memories">
       <div id="sidebar-loading">Lade Eintr&#228;ge&#8230;</div>
     </div>
+    <div id="sidebar-footer" style="display:none;">
+      <button id="sidebar-edit-node" class="edge-btn primary" type="button" style="width:100%">Knoten bearbeiten</button>
+    </div>
   </div>
+</div>
+
+<div id="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Person</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#34d399"></div> Ort</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#60a5fa"></div> Technik</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div> Datum</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#a3e635"></div> Ich / User</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#9ca3af"></div> Konzept</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#fbbf24"></div> Manuell</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#2dd4bf"></div> Gemischt</div>
 </div>
 
 <div id="export-bar">
   <button id="btn-svg-export">SVG exportieren</button>
+  <div id="graph-status" role="status" aria-live="polite"></div>
+</div>
+
+<div id="edge-dialog-backdrop" aria-hidden="true">
+  <div id="edge-dialog" role="dialog" aria-modal="true" aria-labelledby="edge-dialog-title">
+    <h2 id="edge-dialog-title">Verbindung</h2>
+    <div class="edge-endpoints">
+      <div id="edge-source-label" class="edge-endpoint"></div>
+      <div aria-hidden="true">&#8594;</div>
+      <div id="edge-target-label" class="edge-endpoint"></div>
+    </div>
+    <div class="edge-field">
+      <label for="edge-relation-type">Typ</label>
+      <input id="edge-relation-type" type="text" maxlength="64" autocomplete="off" />
+    </div>
+    <div class="edge-field">
+      <label for="edge-label">Label</label>
+      <input id="edge-label" type="text" maxlength="80" autocomplete="off" />
+    </div>
+    <div class="edge-inline">
+      <label class="edge-check">
+        <input id="edge-directed" type="checkbox" />
+        Gerichtet
+      </label>
+      <div class="edge-field">
+        <label for="edge-confidence">Confidence <span id="edge-confidence-value">80%</span></label>
+        <input id="edge-confidence" type="range" min="0" max="100" step="5" value="80" />
+      </div>
+    </div>
+    <div class="edge-field">
+      <label for="edge-note">Notiz</label>
+      <textarea id="edge-note" maxlength="500"></textarea>
+    </div>
+    <div id="edge-error" role="alert"></div>
+    <div class="edge-actions">
+      <button id="edge-delete" class="edge-btn danger" type="button">L&ouml;schen</button>
+      <div class="edge-actions-right">
+        <button id="edge-cancel" class="edge-btn" type="button">Abbrechen</button>
+        <button id="edge-save" class="edge-btn primary" type="button">Speichern</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="node-dialog-backdrop" aria-hidden="true">
+  <div id="node-dialog" role="dialog" aria-modal="true" aria-labelledby="node-dialog-title">
+    <h2 id="node-dialog-title">Knoten</h2>
+    <div class="node-field">
+      <label for="node-label">Name</label>
+      <input id="node-label" type="text" maxlength="160" autocomplete="off" />
+    </div>
+    <div class="node-field">
+      <label for="node-type">Typ</label>
+      <select id="node-type">
+        <option value="concept">Konzept</option>
+        <option value="person">Person</option>
+        <option value="place">Ort</option>
+        <option value="tech">Technik</option>
+        <option value="date">Datum</option>
+      </select>
+    </div>
+    <div class="node-field">
+      <label for="node-note">Notiz</label>
+      <textarea id="node-note" maxlength="500"></textarea>
+    </div>
+    <div class="node-field">
+      <label for="node-confidence">Confidence <span id="node-confidence-value">80%</span></label>
+      <input id="node-confidence" type="range" min="0" max="100" step="5" value="80" />
+    </div>
+    <div id="node-error" role="alert"></div>
+    <div id="node-delete-confirm">
+      Sicher?&nbsp;
+      <button id="node-delete-confirm-yes" class="edge-btn danger" type="button">Ja, l&ouml;schen</button>
+      <button id="node-delete-confirm-no" class="edge-btn" type="button">Abbrechen</button>
+    </div>
+    <div class="node-actions">
+      <button id="node-delete" class="edge-btn danger" type="button" style="visibility:hidden">L&ouml;schen</button>
+      <div class="node-actions-right">
+        <button id="node-cancel" class="edge-btn" type="button">Abbrechen</button>
+        <button id="node-save" class="edge-btn primary" type="button">Speichern</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="tooltip"></div>
@@ -380,6 +821,9 @@
 // ── Config ────────────────────────────────────────────────────────────────────
 const DATA_URL      = "/graph/data";
 const MEMORY_URL    = "/memory";
+const MANUAL_EDGE_URL = "/graph/manual-edges";
+const AUTO_EDGE_HIDE_URL = "/graph/auto-edges/hide";
+const MANUAL_NODE_URL = "/graph/nodes";
 const REFRESH_SECS  = 60;
 const NODE_MIN      = 6;
 const NODE_MAX      = 24;
@@ -395,13 +839,29 @@ let currentSearch  = "";
 let nodeSelection  = null;
 let linkSelection  = null;
 let radiusOf       = null;
+let graphMode      = "explore";
+let pendingLinkSource = null;
+let activeEdgeEdit = null;
+let activeNodeEdit = null;   // {mode: "create"|"edit", node?: {...}}
+let sidebarNode    = null;   // Zuletzt in Sidebar angezeigter Knoten
 
-// ── Colour by weight ──────────────────────────────────────────────────────────
-function nodeColor(w) {
-  if (w >= 3) return "#a3e635";
-  if (w >= 2) return "#4ade80";
-  return "#86efac";
+// ── Colour by entity type ─────────────────────────────────────────────────────
+const TYPE_COLORS = {
+  "user":    "#a3e635",  // lime — zentraler Nutzer-Knoten
+  "person":  "#f59e0b",  // amber — Personen
+  "place":   "#34d399",  // emerald — Orte
+  "tech":    "#60a5fa",  // blue — Technik/Produkte
+  "date":    "#a78bfa",  // violet — Datumsangaben
+  "concept": "#9ca3af",  // gray — generische Konzepte
+};
+
+function nodeColor(d) {
+  return TYPE_COLORS[d.type] || TYPE_COLORS["concept"];
 }
+
+// ── Edge colour by type ────────────────────────────────────────────────────────
+const DIRECTED_EDGE_COLOR = "rgba(163, 230, 53, 0.6)";
+const UNDIRECTED_EDGE_COLOR = "rgba(156, 163, 175, 0.22)";
 
 // ── Radius scale ──────────────────────────────────────────────────────────────
 function makeRadiusScale(nodes) {
@@ -477,7 +937,19 @@ function renderGraph(data) {
     .map(e => ({
       source: nodeById[e.source],
       target: nodeById[e.target],
+      key: e.key || "",
+      id: e.id || null,
+      manualEdgeId: e.manual_edge_id || e.id || null,
+      source_key: e.source_key || "",
+      target_key: e.target_key || "",
       weight: e.weight,
+      type: e.type || "co_occurrence",
+      label: e.label || "",
+      directed: !!e.directed,
+      origin: e.origin || "auto",
+      origins: e.origins || [e.origin || "auto"],
+      confidence: e.confidence == null ? 80 : e.confidence,
+      note: e.note || "",
     }));
   const nodeData = Object.values(nodeById);
 
@@ -487,6 +959,32 @@ function renderGraph(data) {
 
   svgEl = svg.node();
   container.appendChild(svgEl);
+
+  // Pfeilspitzen-Marker für gerichtete Kanten
+  const defs = svg.append("defs");
+  defs.append("marker")
+    .attr("id", "arrow")
+    .attr("viewBox", "0 -4 10 8")
+    .attr("refX", 18)
+    .attr("refY", 0)
+    .attr("markerWidth", 6)
+    .attr("markerHeight", 6)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-4L10,0L0,4")
+    .attr("fill", DIRECTED_EDGE_COLOR);
+
+  defs.append("marker")
+    .attr("id", "arrow-hl")
+    .attr("viewBox", "0 -4 10 8")
+    .attr("refX", 18)
+    .attr("refY", 0)
+    .attr("markerWidth", 6)
+    .attr("markerHeight", 6)
+    .attr("orient", "auto")
+    .append("path")
+    .attr("d", "M0,-4L10,0L0,4")
+    .attr("fill", "#a3e635");
 
   // Zoom layer
   const g = svg.append("g");
@@ -501,17 +999,40 @@ function renderGraph(data) {
   const edgeWeights = edges.map(e => e.weight);
   const wLo = Math.min(...edgeWeights, 1);
   const wHi = Math.max(...edgeWeights, 1);
-  const strokeWidth = d3.scaleLinear().domain([wLo, wHi]).range([0.8, 3.5]).clamp(true);
+  const strokeWidth = d3.scaleLinear().domain([wLo, wHi]).range([0.8, 3.0]).clamp(true);
 
   const link = g.append("g")
     .attr("class", "links")
     .selectAll("line")
     .data(linkData)
     .join("line")
-    .attr("class", "link")
-    .attr("stroke-width", d => strokeWidth(d.weight));
+    .attr("class", d => "link " + (d.directed ? "directed" : "undirected") + " " + edgeOriginClass(d))
+    .attr("stroke-width", d => strokeWidth(d.weight))
+    .attr("stroke", d => d.directed ? DIRECTED_EDGE_COLOR : UNDIRECTED_EDGE_COLOR)
+    .attr("marker-end", d => d.directed ? "url(#arrow)" : null);
 
   linkSelection = link;
+
+  const linkHit = g.append("g")
+    .attr("class", "link-hit-zones")
+    .selectAll("line")
+    .data(linkData)
+    .join("line")
+    .attr("class", "link-hit")
+    .on("click", function(event, d) {
+      event.stopPropagation();
+      if (graphMode !== "edit") return;
+      openEdgeDialogForExisting(d);
+    });
+
+  // ── Edge Labels (nur für benannte Relationships) ─────────────────────────
+  const linkLabels = g.append("g")
+    .attr("class", "link-labels")
+    .selectAll("text")
+    .data(linkData.filter(d => d.label))
+    .join("text")
+    .attr("class", "link-label")
+    .text(d => d.label);
 
   // ── Nodes ────────────────────────────────────────────────────────────────
   const node = g.append("g")
@@ -524,13 +1045,39 @@ function renderGraph(data) {
 
   node.append("circle")
     .attr("r", d => radiusOf(d.weight))
-    .attr("fill", d => nodeColor(d.weight))
-    .attr("stroke", "#0f1117")
-    .attr("stroke-width", 1.5);
+    .attr("fill", d => nodeColor(d))
+    .attr("stroke", d => {
+      if (d.origin === "manual") return "#fbbf24";   // amber — rein manuell
+      if (d.origin === "mixed")  return "#2dd4bf";   // teal — auto + manuell
+      if (d.type   === "user")   return "#a3e635";   // lime — Ich-Knoten
+      return "#0f1117";
+    })
+    .attr("stroke-width", d =>
+      (d.origin === "manual" || d.origin === "mixed" || d.type === "user") ? 2.5 : 1.5
+    )
+    .attr("stroke-dasharray", d => d.origin === "manual" ? "6 3" : null);
+
+  // CSS-Klassen für Origin-States
+  node.classed("manual-node", d => d.origin === "manual");
+  node.classed("mixed-node",  d => d.origin === "mixed");
+
+  // Typ-Icon im Knoten (für große Knoten)
+  node.filter(d => radiusOf(d.weight) >= 14)
+    .append("text")
+    .attr("dy", "0.35em")
+    .attr("font-size", d => Math.round(radiusOf(d.weight) * 0.75) + "px")
+    .attr("text-anchor", "middle")
+    .attr("pointer-events", "none")
+    .attr("fill", "rgba(0,0,0,0.4)")
+    .text(d => {
+      const icons = { user: "👤", person: "👤", place: "📍", tech: "⚙", date: "📅", concept: "" };
+      return icons[d.type] || "";
+    });
 
   node.append("text")
-    .attr("dy", d => radiusOf(d.weight) + 11)
-    .attr("font-size", d => Math.round(9 + radiusOf(d.weight) * 0.25) + "px")
+    .attr("dy", d => radiusOf(d.weight) + 12)
+    .attr("font-size", d => Math.round(9 + radiusOf(d.weight) * 0.2) + "px")
+    .attr("fill", d => nodeColor(d))
     .text(d => d.id);
 
   nodeSelection = node;
@@ -555,7 +1102,14 @@ function renderGraph(data) {
     link
       .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
       .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    linkHit
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
     node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+    // Edge Labels mittig auf der Kante positionieren
+    linkLabels
+      .attr("x", d => (d.source.x + d.target.x) / 2)
+      .attr("y", d => (d.source.y + d.target.y) / 2 - 4);
   }
 
   // ── Interaction ──────────────────────────────────────────────────────────
@@ -564,10 +1118,18 @@ function renderGraph(data) {
   node
     .on("mouseover", function(event, d) {
       const count = d.entries ? d.entries.length : 0;
+      const typeLabel = {
+        user: "Nutzer", person: "Person", place: "Ort",
+        tech: "Technik", date: "Datum", concept: "Konzept"
+      }[d.type] || d.type || "Konzept";
+      const ageStr = d.age_days != null ? d.age_days + " Tage alt" : "";
+      const personAge = d.person_age != null ? " · " + d.person_age + " Jahre" : "";
       tooltip.innerHTML =
         "<strong>" + escHtml(d.id) + "</strong>" +
+        "<span style=\"font-size:11px;color:#6b7280;\">[" + typeLabel + "]</span>" + personAge + "<br>" +
         "Erscheint in <b>" + count + "</b> Eintr&auml;gen<br>" +
         "Verbindungen: <b>" + d.weight + "</b>" +
+        (ageStr ? "<br>" + ageStr : "") +
         "<div class=\"meta\">Klick &rarr; Details &amp; Backlinks</div>";
       tooltip.classList.add("visible");
     })
@@ -583,11 +1145,29 @@ function renderGraph(data) {
     .on("click", function(event, d) {
       event.stopPropagation();
       tooltip.classList.remove("visible");
+      if (graphMode === "connect") {
+        handleConnectNode(d);
+        return;
+      }
+      if (graphMode === "node") {
+        openNodeDialog({ mode: "edit", node: d });
+        return;
+      }
       highlightNeighbors(d);
       openSidebar(d);
     });
 
-  svg.on("click", function() {
+  svg.on("click", function(event) {
+    if (event.target !== svgEl && event.target.closest("g.nodes")) return;
+    if (graphMode === "connect" && pendingLinkSource) {
+      clearPendingLink();
+      setStatus("Auswahl aufgehoben.");
+      return;
+    }
+    if (graphMode === "node") {
+      openNodeDialog({ mode: "create" });
+      return;
+    }
     clearHighlight();
     closeSidebar();
   });
@@ -606,6 +1186,7 @@ function renderGraph(data) {
 
     node.classed("highlighted", n => n.id === d.id);
     node.classed("dimmed",      n => !connected.has(n.id));
+
     link.classed("highlighted", function(l) {
       const sid = typeof l.source === "object" ? l.source.id : l.source;
       const tid = typeof l.target === "object" ? l.target.id : l.target;
@@ -616,13 +1197,250 @@ function renderGraph(data) {
       const tid = typeof l.target === "object" ? l.target.id : l.target;
       return !connected.has(sid) || !connected.has(tid);
     });
+    link.filter(function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      return sid === d.id || tid === d.id;
+    }).attr("marker-end", l => l.directed ? "url(#arrow-hl)" : null);
+
+    linkLabels.classed("highlighted", function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      return sid === d.id || tid === d.id;
+    });
+    linkLabels.classed("dimmed", function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      return !connected.has(sid) || !connected.has(tid);
+    });
   }
 
   function clearHighlight() {
     node.classed("highlighted", false).classed("dimmed", false);
     link.classed("highlighted", false).classed("dimmed", false);
+    link.attr("marker-end", l => l.directed ? "url(#arrow)" : null);
+    linkLabels.classed("highlighted", false).classed("dimmed", false);
   }
 }
+
+function edgeOriginClass(edge) {
+  const origins = edge.origins || [edge.origin || "auto"];
+  if (origins.indexOf("manual") !== -1 && origins.indexOf("auto") !== -1) return "mixed";
+  if (origins.indexOf("manual") !== -1) return "manual";
+  return "auto";
+}
+
+function setStatus(message) {
+  const el = document.getElementById("graph-status");
+  if (el) el.textContent = message || "";
+}
+
+function setEdgeError(message) {
+  const el = document.getElementById("edge-error");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("visible", !!message);
+}
+
+async function requireOk(resp) {
+  if (resp.ok) return;
+  let detail = "";
+  try {
+    const body = await resp.json();
+    detail = typeof body.detail === "string" ? body.detail : (body.detail && body.detail.error) || body.error || "";
+  } catch (err) {
+    detail = await resp.text().catch(function() { return ""; });
+  }
+  if (resp.status === 404) {
+    throw new Error("Backend-Endpunkt nicht gefunden. AirPI muss mit dem neuen Server-Code neu gestartet werden.");
+  }
+  throw new Error("HTTP " + resp.status + (detail ? " - " + detail : ""));
+}
+
+function setGraphMode(mode) {
+  graphMode = mode;
+  document.querySelectorAll(".mode-btn").forEach(function(btn) {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  });
+  clearPendingLink();
+  if (mode === "connect") {
+    setStatus("Ersten Knoten wählen.");
+  } else if (mode === "edit") {
+    setStatus("Kante anklicken zum Bearbeiten / Ausblenden.");
+  } else if (mode === "node") {
+    setStatus("Knoten anklicken zum Bearbeiten — leere Fläche für neuen Knoten.");
+  } else {
+    setStatus("");
+  }
+}
+
+function clearPendingLink() {
+  pendingLinkSource = null;
+  if (nodeSelection) nodeSelection.classed("pending-link", false);
+}
+
+function handleConnectNode(node) {
+  if (!pendingLinkSource) {
+    pendingLinkSource = node;
+    if (nodeSelection) {
+      nodeSelection.classed("pending-link", n => (n.key || n.id) === (node.key || node.id));
+    }
+    setStatus("Zweiten Knoten wählen.");
+    return;
+  }
+  if ((pendingLinkSource.key || pendingLinkSource.id) === (node.key || node.id)) {
+    clearPendingLink();
+    setStatus("Auswahl aufgehoben.");
+    return;
+  }
+  openEdgeDialog({
+    mode: "create",
+    source: pendingLinkSource,
+    target: node,
+  });
+}
+
+function openEdgeDialogForExisting(edge) {
+  const hasManual = (edge.origins || []).indexOf("manual") !== -1 && edge.manualEdgeId;
+  openEdgeDialog({
+    mode: hasManual ? "manual" : "auto",
+    edge: edge,
+    source: edge.source,
+    target: edge.target,
+  });
+}
+
+function openEdgeDialog(state) {
+  activeEdgeEdit = state;
+  setEdgeError("");
+  const backdrop = document.getElementById("edge-dialog-backdrop");
+  const title = document.getElementById("edge-dialog-title");
+  const deleteBtn = document.getElementById("edge-delete");
+  const saveBtn = document.getElementById("edge-save");
+  const source = state.source || {};
+  const target = state.target || {};
+  const edge = state.edge || {};
+
+  title.textContent = state.mode === "create" ? "Verbindung anlegen" : "Verbindung bearbeiten";
+  document.getElementById("edge-source-label").textContent = source.id || edge.source || "";
+  document.getElementById("edge-target-label").textContent = target.id || edge.target || "";
+  document.getElementById("edge-relation-type").value = edge.type || "manual";
+  document.getElementById("edge-label").value = edge.label || "";
+  document.getElementById("edge-directed").checked = state.mode === "create" ? true : !!edge.directed;
+  document.getElementById("edge-confidence").value = edge.confidence == null ? 80 : edge.confidence;
+  document.getElementById("edge-confidence-value").textContent = document.getElementById("edge-confidence").value + "%";
+  document.getElementById("edge-note").value = edge.note || "";
+
+  deleteBtn.style.visibility = state.mode === "create" ? "hidden" : "visible";
+  deleteBtn.textContent = state.mode === "auto" ? "Ausblenden" : "Löschen";
+  saveBtn.style.display = state.mode === "auto" ? "none" : "inline-block";
+
+  backdrop.classList.add("open");
+  backdrop.setAttribute("aria-hidden", "false");
+  document.getElementById("edge-relation-type").focus();
+}
+
+function closeEdgeDialog() {
+  activeEdgeEdit = null;
+  const backdrop = document.getElementById("edge-dialog-backdrop");
+  backdrop.classList.remove("open");
+  backdrop.setAttribute("aria-hidden", "true");
+}
+
+function edgePayloadFromDialog() {
+  const source = activeEdgeEdit.source || {};
+  const target = activeEdgeEdit.target || {};
+  const edge = activeEdgeEdit.edge || {};
+  return {
+    source_key: source.key || source.id || edge.source_key || "",
+    target_key: target.key || target.id || edge.target_key || "",
+    source_label: source.id || edge.source || "",
+    target_label: target.id || edge.target || "",
+    relation_type: document.getElementById("edge-relation-type").value || "manual",
+    label: document.getElementById("edge-label").value || "",
+    directed: document.getElementById("edge-directed").checked,
+    confidence: Number(document.getElementById("edge-confidence").value || 80),
+    note: document.getElementById("edge-note").value || "",
+  };
+}
+
+async function saveEdgeDialog() {
+  if (!activeEdgeEdit || activeEdgeEdit.mode === "auto") return;
+  setEdgeError("");
+  const payload = edgePayloadFromDialog();
+  const isCreate = activeEdgeEdit.mode === "create";
+  const url = isCreate ? MANUAL_EDGE_URL : MANUAL_EDGE_URL + "/" + activeEdgeEdit.edge.manualEdgeId;
+  const saveBtn = document.getElementById("edge-save");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Speichere...";
+  try {
+    const resp = await fetch(url, {
+      method: isCreate ? "POST" : "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await requireOk(resp);
+    closeEdgeDialog();
+    clearPendingLink();
+    setStatus(isCreate ? "Verbindung gespeichert." : "Verbindung aktualisiert.");
+    await loadGraph();
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = "Speichern";
+  }
+}
+
+async function deleteOrHideEdgeDialog() {
+  if (!activeEdgeEdit || activeEdgeEdit.mode === "create") return;
+  setEdgeError("");
+  const mode = activeEdgeEdit.mode;
+  let resp;
+  if (mode === "auto") {
+    resp = await fetch(AUTO_EDGE_HIDE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        edge_key: activeEdgeEdit.edge.key,
+        note: document.getElementById("edge-note").value || "",
+      }),
+    });
+  } else {
+    resp = await fetch(MANUAL_EDGE_URL + "/" + activeEdgeEdit.edge.manualEdgeId, {
+      method: "DELETE",
+    });
+  }
+  await requireOk(resp);
+  closeEdgeDialog();
+  setStatus(mode === "auto" ? "Auto-Verbindung ausgeblendet." : "Verbindung gelöscht.");
+  await loadGraph();
+}
+
+document.querySelectorAll(".mode-btn").forEach(function(btn) {
+  btn.addEventListener("click", function() {
+    setGraphMode(btn.dataset.mode || "explore");
+  });
+});
+
+document.getElementById("edge-confidence").addEventListener("input", function() {
+  document.getElementById("edge-confidence-value").textContent = this.value + "%";
+});
+
+document.getElementById("edge-cancel").addEventListener("click", closeEdgeDialog);
+document.getElementById("edge-dialog-backdrop").addEventListener("click", function(event) {
+  if (event.target === this) closeEdgeDialog();
+});
+document.getElementById("edge-save").addEventListener("click", function() {
+  saveEdgeDialog().catch(function(err) {
+    setEdgeError(err.message);
+    setStatus("Fehler: " + err.message);
+  });
+});
+document.getElementById("edge-delete").addEventListener("click", function() {
+  deleteOrHideEdgeDialog().catch(function(err) {
+    setEdgeError(err.message);
+    setStatus("Fehler: " + err.message);
+  });
+});
 
 // ── Search (QW-8) ─────────────────────────────────────────────────────────────
 function applySearch(term) {
@@ -652,19 +1470,40 @@ document.getElementById("graph-search").addEventListener("input", function() {
 
 // ── Sidebar / Backlinks (QW-8) ────────────────────────────────────────────────
 async function openSidebar(d) {
+  sidebarNode = d;
   const sidebar = document.getElementById("sidebar");
-  document.getElementById("sidebar-title").textContent = d.id;
+
+  // Origin-Badge
+  const originMap = { auto: "auto", manual: "manuell", mixed: "gemischt" };
+  const originBadgeHtml = d.origin
+    ? "<span class='origin-badge " + escHtml(d.origin) + "'>" + escHtml(originMap[d.origin] || d.origin) + "</span>"
+    : "";
+  document.getElementById("sidebar-title").innerHTML = escHtml(d.id) + originBadgeHtml;
 
   const ageDays    = d.age_days    != null ? d.age_days    : "?";
   const confidence = d.confidence  != null ? d.confidence  : 80;
   const category   = d.category   || "fact";
   const source     = d.source     || "unknown";
 
+  const typeLabel = {
+    user: "Nutzer", person: "Person", place: "Ort",
+    tech: "Technik", date: "Datum", concept: "Konzept"
+  }[d.type] || d.type || "Konzept";
+  const typeColor = TYPE_COLORS[d.type] || "#9ca3af";
+  const personAgeStr = d.person_age != null ? "<br><strong>Alter:</strong> " + d.person_age + " Jahre" : "";
+
   document.getElementById("sidebar-meta").innerHTML =
+    "<strong>Typ:</strong> <span style='color:" + typeColor + "'>" + escHtml(typeLabel) + "</span><br>" +
     "<strong>Kategorie:</strong> " + escHtml(category) + "<br>" +
     "<strong>Quelle:</strong> "    + escHtml(source)   + "<br>" +
     "<strong>Confidence:</strong> " + confidence       + "%<br>" +
-    "<strong>Alter:</strong> "     + ageDays           + " Tage";
+    "<strong>Gesehen:</strong> "   + ageDays           + " Tage" + personAgeStr;
+
+  // "Bearbeiten"-Button nur für manuelle oder gemischte Knoten anzeigen
+  const footer = document.getElementById("sidebar-footer");
+  if (footer) {
+    footer.style.display = (d.origin === "manual" || d.origin === "mixed") ? "block" : "none";
+  }
 
   const memoriesEl = document.getElementById("sidebar-memories");
   memoriesEl.innerHTML = "<div id=\"sidebar-loading\">Lade Einträge…</div>";
@@ -703,10 +1542,144 @@ async function openSidebar(d) {
 }
 
 function closeSidebar() {
+  sidebarNode = null;
   document.getElementById("sidebar").classList.remove("open");
 }
 
 document.getElementById("sidebar-close").addEventListener("click", closeSidebar);
+
+document.getElementById("sidebar-edit-node").addEventListener("click", function() {
+  if (sidebarNode) openNodeDialog({ mode: "edit", node: sidebarNode });
+});
+
+// ── Node Dialog ───────────────────────────────────────────────────────────────
+
+function openNodeDialog(state) {
+  activeNodeEdit = state;
+  setNodeError("");
+  const node   = state.node || {};
+  const isEdit = state.mode === "edit";
+  const hasManualId = isEdit && node.manual_node_id;
+
+  document.getElementById("node-dialog-title").textContent =
+    isEdit ? "Knoten bearbeiten" : "Knoten erstellen";
+  document.getElementById("node-label").value      = isEdit ? (node.id || "") : "";
+  document.getElementById("node-type").value       = isEdit ? (node.type || "concept") : "concept";
+  document.getElementById("node-note").value       = isEdit ? (node.manual_note || node.note || "") : "";
+  const conf = isEdit ? (node.confidence != null ? node.confidence : 80) : 80;
+  document.getElementById("node-confidence").value = conf;
+  document.getElementById("node-confidence-value").textContent = conf + "%";
+
+  const deleteBtn = document.getElementById("node-delete");
+  deleteBtn.style.visibility = hasManualId ? "visible" : "hidden";
+  deleteBtn.style.display = "";
+  document.getElementById("node-delete-confirm").classList.remove("visible");
+
+  const backdrop = document.getElementById("node-dialog-backdrop");
+  backdrop.classList.add("open");
+  backdrop.setAttribute("aria-hidden", "false");
+  document.getElementById("node-label").focus();
+}
+
+function closeNodeDialog() {
+  activeNodeEdit = null;
+  const backdrop = document.getElementById("node-dialog-backdrop");
+  backdrop.classList.remove("open");
+  backdrop.setAttribute("aria-hidden", "true");
+  document.getElementById("node-delete-confirm").classList.remove("visible");
+}
+
+function setNodeError(msg) {
+  const el = document.getElementById("node-error");
+  el.textContent = msg || "";
+  el.classList.toggle("visible", !!msg);
+}
+
+async function saveNodeDialog() {
+  if (!activeNodeEdit) return;
+  setNodeError("");
+  const label      = document.getElementById("node-label").value.trim();
+  const type       = document.getElementById("node-type").value;
+  const note       = document.getElementById("node-note").value;
+  const confidence = Number(document.getElementById("node-confidence").value);
+
+  if (!label) { setNodeError("Name darf nicht leer sein."); return; }
+
+  const btn = document.getElementById("node-save");
+  btn.disabled = true;
+  btn.textContent = "Speichere…";
+  try {
+    const state  = activeNodeEdit;
+    const isEdit = state.mode === "edit";
+    const manualNodeId = (state.node || {}).manual_node_id;
+
+    let resp;
+    if (isEdit && manualNodeId) {
+      resp = await fetch(MANUAL_NODE_URL + "/" + manualNodeId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, type, note, confidence }),
+      });
+    } else {
+      resp = await fetch(MANUAL_NODE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, type, note, confidence }),
+      });
+    }
+    await requireOk(resp);
+    closeNodeDialog();
+    setStatus(isEdit && manualNodeId ? "Knoten aktualisiert." : "Knoten erstellt.");
+    await loadGraph();
+  } catch (err) {
+    setNodeError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Speichern";
+  }
+}
+
+async function deleteNodeDialog() {
+  if (!activeNodeEdit || activeNodeEdit.mode !== "edit") return;
+  const manualNodeId = (activeNodeEdit.node || {}).manual_node_id;
+  if (!manualNodeId) {
+    setNodeError("Auto-generierte Knoten können nicht gelöscht werden.");
+    return;
+  }
+  setNodeError("");
+  try {
+    const resp = await fetch(MANUAL_NODE_URL + "/" + manualNodeId, { method: "DELETE" });
+    await requireOk(resp);
+    closeNodeDialog();
+    closeSidebar();
+    setStatus("Knoten gelöscht.");
+    await loadGraph();
+  } catch (err) {
+    setNodeError(err.message);
+  }
+}
+
+document.getElementById("node-confidence").addEventListener("input", function() {
+  document.getElementById("node-confidence-value").textContent = this.value + "%";
+});
+document.getElementById("node-cancel").addEventListener("click", closeNodeDialog);
+document.getElementById("node-dialog-backdrop").addEventListener("click", function(event) {
+  if (event.target === this) closeNodeDialog();
+});
+document.getElementById("node-save").addEventListener("click", function() {
+  saveNodeDialog().catch(function(err) { setNodeError(err.message); });
+});
+document.getElementById("node-delete").addEventListener("click", function() {
+  document.getElementById("node-delete-confirm").classList.add("visible");
+  this.style.display = "none";
+});
+document.getElementById("node-delete-confirm-yes").addEventListener("click", function() {
+  deleteNodeDialog().catch(function(err) { setNodeError(err.message); });
+});
+document.getElementById("node-delete-confirm-no").addEventListener("click", function() {
+  document.getElementById("node-delete-confirm").classList.remove("visible");
+  document.getElementById("node-delete").style.display = "";
+});
 
 // ── SVG Export (QW-8) ─────────────────────────────────────────────────────────
 document.getElementById("btn-svg-export").addEventListener("click", function() {

@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, field_validator
 import config
 from model_manager import build_json_grammar, manager, select_model_for_prompt
 from memory.manager import get_memory_manager
-from memory.graph import GraphBuilder
+from memory.graph import GraphBuilder, merge_graph_overlays
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -645,6 +645,70 @@ async def memory_get() -> dict:
 
 # ── Graph Endpoints ──────────────────────────────────────────────────────────
 
+class GraphManualEdgeCreateRequest(BaseModel):
+    source_key: str = Field(min_length=1, max_length=160)
+    target_key: str = Field(min_length=1, max_length=160)
+    source_label: str = Field(default="", max_length=160)
+    target_label: str = Field(default="", max_length=160)
+    relation_type: str = Field(default="manual", min_length=1, max_length=64)
+    label: str = Field(default="", max_length=80)
+    directed: bool = True
+    confidence: int = Field(default=80, ge=0, le=100)
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("relation_type")
+    @classmethod
+    def validate_relation_type(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_\- ]{1,64}", cleaned):
+            raise ValueError("relation_type may only contain letters, numbers, spaces, '_' and '-'")
+        return cleaned
+
+
+class GraphManualEdgeUpdateRequest(BaseModel):
+    relation_type: str | None = Field(default=None, min_length=1, max_length=64)
+    label: str | None = Field(default=None, max_length=80)
+    directed: bool | None = None
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    note: str | None = Field(default=None, max_length=500)
+    source_label: str | None = Field(default=None, max_length=160)
+    target_label: str | None = Field(default=None, max_length=160)
+
+    @field_validator("relation_type")
+    @classmethod
+    def validate_relation_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_\- ]{1,64}", cleaned):
+            raise ValueError("relation_type may only contain letters, numbers, spaces, '_' and '-'")
+        return cleaned
+
+
+class GraphAutoEdgeHideRequest(BaseModel):
+    edge_key: str = Field(min_length=1, max_length=400)
+    note: str = Field(default="", max_length=500)
+
+
+class GraphEdgeOverrideClearRequest(BaseModel):
+    edge_key: str = Field(min_length=1, max_length=400)
+    action: str = Field(default="hide", pattern="^hide$")
+
+
+class GraphManualNodeCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=160)
+    type: str = Field(default="concept", pattern=r"^(person|place|tech|date|concept)$")
+    note: str = Field(default="", max_length=500)
+    confidence: int = Field(default=80, ge=0, le=100)
+
+
+class GraphManualNodeUpdateRequest(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=160)
+    type: str | None = Field(default=None, pattern=r"^(person|place|tech|date|concept)$")
+    note: str | None = Field(default=None, max_length=500)
+    confidence: int | None = Field(default=None, ge=0, le=100)
+
+
 @app.get("/graph")
 async def graph_redirect() -> RedirectResponse:
     return RedirectResponse(url="/ui/graph.html", status_code=307)
@@ -653,10 +717,157 @@ async def graph_redirect() -> RedirectResponse:
 @app.get("/graph/data")
 async def graph_data() -> dict:
     try:
-        entries = get_memory_manager().all_active()
-        return GraphBuilder().build(entries)
+        mem = get_memory_manager()
+        entries = mem.all_active()
+        graph = GraphBuilder().build(entries)
+        return merge_graph_overlays(
+            graph,
+            manual_edges=mem.list_manual_edges(),
+            manual_nodes=mem.list_manual_nodes(),
+            edge_overrides=mem.list_edge_overrides(),
+        )
     except Exception as exc:
         logger.exception("graph/data failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.get("/graph/manual-edges")
+async def graph_manual_edges() -> dict:
+    try:
+        return {"edges": get_memory_manager().list_manual_edges()}
+    except Exception as exc:
+        logger.exception("graph/manual-edges failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.post("/graph/manual-edges")
+async def graph_manual_edge_create(request: GraphManualEdgeCreateRequest) -> dict:
+    try:
+        edge = get_memory_manager().add_manual_edge(**request.model_dump())
+        if edge is None:
+            raise HTTPException(status_code=400, detail={"error": "invalid manual edge"})
+        return {"ok": True, "edge": edge}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/manual-edges POST failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.patch("/graph/manual-edges/{edge_id}")
+async def graph_manual_edge_update(edge_id: int, request: GraphManualEdgeUpdateRequest) -> dict:
+    try:
+        edge = get_memory_manager().update_manual_edge(
+            edge_id,
+            request.model_dump(exclude_unset=True),
+        )
+        if edge is None:
+            raise HTTPException(status_code=404, detail={"error": "manual edge not found"})
+        return {"ok": True, "edge": edge}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/manual-edges PATCH failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.delete("/graph/manual-edges/{edge_id}")
+async def graph_manual_edge_delete(edge_id: int) -> dict:
+    try:
+        deleted = get_memory_manager().delete_manual_edge(edge_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail={"error": "manual edge not found"})
+        return {"ok": True, "deleted": edge_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/manual-edges DELETE failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.post("/graph/auto-edges/hide")
+async def graph_auto_edge_hide(request: GraphAutoEdgeHideRequest) -> dict:
+    try:
+        override = get_memory_manager().hide_auto_edge(request.edge_key, request.note)
+        if override is None:
+            raise HTTPException(status_code=400, detail={"error": "invalid edge override"})
+        return {"ok": True, "override": override}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/auto-edges/hide failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.get("/graph/nodes")
+async def graph_nodes_list() -> dict:
+    """Listet alle manuellen Graph-Knoten."""
+    try:
+        return {"nodes": get_memory_manager().list_manual_nodes()}
+    except Exception as exc:
+        logger.exception("graph/nodes GET failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.post("/graph/nodes")
+async def graph_node_create(request: GraphManualNodeCreateRequest) -> dict:
+    """Erstellt einen manuellen Graph-Knoten."""
+    try:
+        node = get_memory_manager().add_manual_node(**request.model_dump())
+        if node is None:
+            raise HTTPException(status_code=400, detail={"error": "invalid manual node"})
+        return {"ok": True, "node": node}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/nodes POST failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.patch("/graph/nodes/{node_id}")
+async def graph_node_update(node_id: int, request: GraphManualNodeUpdateRequest) -> dict:
+    """Aktualisiert einen manuellen Graph-Knoten."""
+    try:
+        node = get_memory_manager().update_manual_node(
+            node_id,
+            request.model_dump(exclude_unset=True),
+        )
+        if node is None:
+            raise HTTPException(status_code=404, detail={"error": "manual node not found"})
+        return {"ok": True, "node": node}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/nodes PATCH failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.delete("/graph/nodes/{node_id}")
+async def graph_node_delete(node_id: int) -> dict:
+    """Soft-löscht einen manuellen Graph-Knoten."""
+    try:
+        deleted = get_memory_manager().delete_manual_node(node_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail={"error": "manual node not found"})
+        return {"ok": True, "deleted": node_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/nodes DELETE failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.delete("/graph/auto-edges/override")
+async def graph_auto_edge_override_clear(request: GraphEdgeOverrideClearRequest) -> dict:
+    try:
+        cleared = get_memory_manager().clear_edge_override(request.edge_key, request.action)
+        if not cleared:
+            raise HTTPException(status_code=404, detail={"error": "edge override not found"})
+        return {"ok": True, "cleared": request.edge_key, "action": request.action}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("graph/auto-edges/override DELETE failed")
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
