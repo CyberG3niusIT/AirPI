@@ -37,6 +37,7 @@ from config import (
     SESSIONS_DB_PATH,
     SPECULATIVE,
     SPECULATIVE_DRAFT_MODEL,
+    SPECULATIVE_FORCE,
 )
 
 if TYPE_CHECKING:
@@ -522,7 +523,7 @@ class ModelManager:
         if SPECULATIVE:
             try:
                 from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-                if large and SPECULATIVE_DRAFT_MODEL:
+                if (large or SPECULATIVE_FORCE) and SPECULATIVE_DRAFT_MODEL:
                     draft_path = resolve_model_path(SPECULATIVE_DRAFT_MODEL)
                     if draft_path.is_file():
                         # Tokenizer-Kompatibilitätscheck anhand des Modellnamens.
@@ -558,12 +559,12 @@ class ModelManager:
                     else:
                         draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                         logger.warning("speculative: draft file not found, using prompt-lookup: %s", model_name)
-                elif large:
+                elif large or SPECULATIVE_FORCE:
                     draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                     logger.info("speculative: prompt-lookup enabled: %s", model_name)
                 else:
                     logger.info(
-                        "speculative: disabled for small model due stability preference: %s",
+                        "speculative: disabled for small model (set AIRPI_SPECULATIVE_FORCE=true to override): %s",
                         model_name,
                     )
             except Exception as exc:

@@ -73,9 +73,13 @@ KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "8"))
 # Speculative Decoding via prompt-lookup (n-gram, zero extra RAM) oder draft model
 SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "true"
 
-# Dateiname des Draft-Modells für echtes Draft-Target Speculative Decoding (1.5B → Gemma/7B)
-# Nur aktiv wenn SPECULATIVE=true und das Modell eine "large"-Kennung trägt
+# Dateiname des Draft-Modells für echtes Draft-Target Speculative Decoding (0.5B → 1.5B)
+# Nur aktiv wenn SPECULATIVE=true und das Modell eine "large"-Kennung trägt (oder FORCE=true)
 SPECULATIVE_DRAFT_MODEL: str | None = os.environ.get("AIRPI_SPECULATIVE_DRAFT_MODEL")
+
+# SPECULATIVE_FORCE=true: Speculative auch für kleine Modelle aktivieren (z.B. 0.5B→1.5B).
+# Umgeht den "only for large models"-Guard — nur setzen wenn Tokenizer-Familie bekannt kompatibel.
+SPECULATIVE_FORCE: bool = os.environ.get("AIRPI_SPECULATIVE_FORCE", "false").lower() == "true"
 
 # Pfad zur SQLite-Datenbank für persistente Sessions.
 # Fallback auf /tmp wenn /opt/airpi nicht beschreibbar ist.
