@@ -320,9 +320,9 @@ pytest tests/test_integration.py -s  # Integration (requires live server)
 
 ```
 AirPI/
-├── server.py                 # FastAPI app, endpoints
-├── model_manager.py          # Model loading & cache
-├── config.py                 # Configuration
+├── server.py                # FastAPI app, endpoints
+├── model_manager.py         # Model loading & cache
+├── config.py                # Configuration
 ├── cli/
 │   └── main.py              # CLI implementation
 ├── memory/
