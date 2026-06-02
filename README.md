@@ -1,4 +1,4 @@
-# AirPI v2: Stateful LLM Inference Server for Raspberry Pi 5
+# AirPI: Stateful LLM Inference Server for Raspberry Pi 5
 
 > Ollama-compatible inference server with persistent memory, knowledge graph, web UI, and CLI for a Raspberry Pi 5 with 8 GB RAM and NVMe storage.
 
