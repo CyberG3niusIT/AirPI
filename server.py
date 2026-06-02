@@ -949,30 +949,126 @@ def _apply_chatml(messages: list[ChatMessage]) -> str:
     return "\n".join(parts)
 
 
-@app.post("/api/chat")
-async def api_chat(request: ChatRequest) -> dict:
+def _build_chat_prompt(request: ChatRequest) -> str:
+    """Baut den vollständigen ChatML-Prompt — injiziert request.system als erste Message."""
+    messages = list(request.messages)
+    if request.system:
+        messages = [ChatMessage(role="system", content=request.system)] + messages
+    return _apply_chatml(messages)
+
+
+async def _stream_chat(
+    model_name: str,
+    prompt: str,
+    request: ChatRequest,
+) -> AsyncGenerator[bytes, None]:
+    """NDJSON-Token-Stream für /api/chat (UI erwartet chunk.message.content)."""
+    global _queue_depth
+    _queue_depth += 1
+    token_count = 0
+    start_ns = time.perf_counter_ns()
+    try:
+        async with manager.semaphore:
+            async for token in manager.stream_generate(
+                model_name=model_name,
+                prompt=prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=0.95,
+                stop=["<|im_end|>", "<|im_start|>"],
+            ):
+                token_count += 1
+                yield (json.dumps({
+                    "model": model_name,
+                    "message": {"role": "assistant", "content": token},
+                    "done": False,
+                }) + "\n").encode()
+
+        elapsed_ns = time.perf_counter_ns() - start_ns
+        yield (json.dumps({
+            "model": model_name,
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "eval_count": token_count,
+            "eval_duration": elapsed_ns,
+        }) + "\n").encode()
+        metrics.record_request(model_name, elapsed_ns / 1_000_000_000, token_count, False)
+
+    except Exception as exc:
+        metrics.record_error()
+        logger.exception("api/chat stream failed: model=%s", model_name)
+        yield (json.dumps({
+            "model": model_name,
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "error": str(exc),
+        }) + "\n").encode()
+    finally:
+        _queue_depth -= 1
+
+
+@app.post("/api/chat", response_model=None)
+async def api_chat(request: ChatRequest, http_request: Request) -> StreamingResponse | dict:
+    global _queue_depth
+    request_id = http_request.headers.get("x-request-id", str(uuid.uuid4()))
+
+    if _queue_depth >= config.MAX_QUEUE:
+        metrics.record_error()
+        raise _http_error(503, ErrorCode.QUEUE_FULL,
+                          f"Inference queue is full ({config.MAX_QUEUE}).", True, request_id)
+
     last_content = request.messages[-1].content if request.messages else ""
     preferred = request.model or None
-    model_name = select_model_for_prompt(last_content, preferred)
-    prompt = _apply_chatml(request.messages)
     try:
-        result = await manager.generate(
-            model_name,
-            prompt,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            top_p=0.95,
-            stop=["<|im_end|>", "<|im_start|>"],
+        model_name = select_model_for_prompt(last_content, preferred)
+    except ValueError as exc:
+        raise _http_error(422, ErrorCode.INVALID_REQUEST, "Invalid model name",
+                          False, request_id) from exc
+
+    prompt = _build_chat_prompt(request)
+
+    # Streaming: UI sendet stream=true — gibt NDJSON-Chunks zurück
+    if request.stream:
+        return StreamingResponse(
+            _stream_chat(model_name, prompt, request),
+            media_type="application/x-ndjson",
         )
+
+    # Nicht-Streaming: Semaphore schützt vor Concurrency-Korruption im LLM
+    _queue_depth += 1
+    start_ns = time.perf_counter_ns()
+    try:
+        async with manager.semaphore:
+            result = await manager.generate(
+                model_name=model_name,
+                prompt=prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=0.95,
+                stop=["<|im_end|>", "<|im_start|>"],
+            )
+    except FileNotFoundError as exc:
+        metrics.record_error()
+        raise _http_error(404, ErrorCode.MODEL_NOT_FOUND, "Model is not available",
+                          False, request_id) from exc
     except Exception as exc:
+        metrics.record_error()
         logger.exception("api/chat inference failed")
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+    finally:
+        _queue_depth -= 1
+
+    elapsed_ns = time.perf_counter_ns() - start_ns
     choices = result.get("choices", [{}])
     text = choices[0].get("text", "") if choices else ""
+    tokens = result.get("usage", {}).get("completion_tokens", 0)
+    metrics.record_request(model_name, elapsed_ns / 1_000_000_000, tokens, False)
     return {
         "model": model_name,
         "message": {"role": "assistant", "content": text},
         "done": True,
+        "eval_count": tokens,
+        "eval_duration": elapsed_ns,
     }
 
 
