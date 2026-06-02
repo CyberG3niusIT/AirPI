@@ -289,10 +289,10 @@ See `.env.example` for all options.
 │   FastAPI Server (server.py)        │
 │  /api/generate • /api/chat          │
 │  /memory • /graph • /ui             │
-└────────────┬────────────────────────┘
-             │
-     ┌───────┼────────┐
-     │       │        │
+└───────────┬─────────────────────────┘
+            │
+     ┌──────┼──────────┐
+     │      │          │
 ┌────▼──┐ ┌─▼──────┐ ┌─▼────────────┐
 │ Model │ │ Memory │ │ Knowledge    │
 │Manager│ │ System │ │ Graph        │
