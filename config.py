@@ -33,7 +33,7 @@ N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "4096"))
 N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "4"))
 N_BATCH_SMALL: int = int(os.environ.get("AIRPI_N_BATCH_SMALL", "1024"))
 N_BATCH_LARGE: int = int(os.environ.get("AIRPI_N_BATCH_LARGE", "512"))
-N_UBATCH_SMALL: int = int(os.environ.get("AIRPI_N_UBATCH_SMALL", "512"))
+N_UBATCH_SMALL: int = int(os.environ.get("AIRPI_N_UBATCH_SMALL", "1024"))
 N_UBATCH_LARGE: int = int(os.environ.get("AIRPI_N_UBATCH_LARGE", "256"))
 FLASH_ATTN: bool = os.environ.get("AIRPI_FLASH_ATTN", "true").lower() == "true"
 
