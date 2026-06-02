@@ -74,6 +74,15 @@ SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "tru
 # Nur aktiv wenn SPECULATIVE=true und das Modell eine "large"-Kennung trägt
 SPECULATIVE_DRAFT_MODEL: str | None = os.environ.get("AIRPI_SPECULATIVE_DRAFT_MODEL")
 
+# Pfad zur SQLite-Datenbank für persistente Sessions.
+# Fallback auf /tmp wenn /opt/airpi nicht beschreibbar ist.
+SESSIONS_DB_PATH: str = os.environ.get("AIRPI_SESSIONS_DB_PATH", "/opt/airpi/sessions.db")
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+
+MEMORY_MD_PATH: str = os.getenv("AIRPI_MEMORY_MD_PATH", "/opt/airpi/memory.md")
+MEMORY_EXTRACT_ENABLED: bool = os.getenv("AIRPI_MEMORY_EXTRACT", "true").lower() == "true"
+
 # ── Server ────────────────────────────────────────────────────────────────────
 
 HOST: str = os.environ.get("AIRPI_HOST", "127.0.0.1")

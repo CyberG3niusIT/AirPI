@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AirPI Chat</title>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/dompurify.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--bg2:#1a1d27;--bg3:#22263a;
+  --border:#2e3347;--text:#e2e4ef;--muted:#7b82a0;
+  --accent:#6c7fff;--accent2:#4f5fd4;
+  --green:#3ecf8e;--red:#f87171;--yellow:#facc15;
+  --radius:10px;--font:'SF Mono',ui-monospace,monospace;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;max-width:860px;margin:0 auto}
+
+/* ── Header ── */
+#header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg2);border-bottom:1px solid var(--border);flex-shrink:0}
+#logo{font-weight:700;font-size:17px;letter-spacing:.5px;color:var(--accent)}
+#logo span{color:var(--muted);font-weight:400}
+#model-select{flex:1;min-width:0;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:14px;cursor:pointer}
+#model-select:focus{outline:2px solid var(--accent);outline-offset:1px}
+#session-wrap{display:flex;align-items:center;gap:6px}
+#session-label{font-size:12px;color:var(--muted);white-space:nowrap}
+#session-input{width:110px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:6px;font-size:13px}
+#session-input:focus{outline:2px solid var(--accent);outline-offset:1px}
+#status-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
+#status-dot.online{background:var(--green)}
+#status-dot.offline{background:var(--red)}
+
+/* ── Header action buttons (gear, export) ── */
+.hdr-btn{background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:4px 6px;border-radius:5px;line-height:1;transition:color .15s,background .15s;flex-shrink:0}
+.hdr-btn:hover{color:var(--text);background:var(--bg3)}
+
+/* ── Export dropdown ── */
+#export-wrap{position:relative;flex-shrink:0}
+#export-menu{display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--bg2);border:1px solid var(--border);border-radius:6px;z-index:30;min-width:130px;overflow:hidden}
+#export-menu.open{display:block}
+#export-menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);padding:8px 14px;font-size:13px;cursor:pointer}
+#export-menu button:hover{background:var(--bg3)}
+
+/* ── Health stats bar (QW-4) ── */
+#health-bar{padding:3px 16px;display:flex;align-items:center;gap:0;background:var(--bg2);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--muted);flex-shrink:0;white-space:nowrap;overflow:hidden}
+#health-bar span.hb-sep{margin:0 8px;opacity:.4}
+
+/* ── Messages ── */
+#messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+#messages::-webkit-scrollbar{width:4px}
+#messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.msg{display:flex;flex-direction:column;gap:4px;max-width:88%}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.assistant{align-self:flex-start;align-items:flex-start}
+.bubble{padding:10px 14px;border-radius:var(--radius);line-height:1.55;word-break:break-word;font-size:14.5px}
+.msg.user .bubble{background:var(--accent2);color:#fff;border-bottom-right-radius:3px;white-space:pre-wrap}
+.msg.assistant .bubble{background:var(--bg2);border:1px solid var(--border);border-bottom-left-radius:3px}
+/* streaming plain text */
+.bubble.streaming{white-space:pre-wrap}
+/* rendered markdown */
+.bubble.rendered{white-space:normal}
+.bubble.rendered p{margin-bottom:.6em}
+.bubble.rendered p:last-child{margin-bottom:0}
+.bubble.rendered ul,.bubble.rendered ol{margin:.4em 0 .4em 1.4em}
+.bubble.rendered li{margin-bottom:.2em}
+.bubble.rendered h1,.bubble.rendered h2,.bubble.rendered h3{margin:.6em 0 .3em;font-size:1em;font-weight:600;color:var(--text)}
+.bubble.rendered a{color:var(--accent)}
+.bubble.rendered strong{color:var(--text)}
+.bubble.rendered blockquote{border-left:3px solid var(--border);margin:.5em 0;padding-left:.8em;color:var(--muted)}
+/* code blocks (QW-1) */
+.bubble pre{background:var(--bg3,#1e1e2e);border-radius:6px;padding:.75em;overflow-x:auto;font-family:monospace;font-size:13px;position:relative;margin:.5em 0}
+.bubble pre code{background:none;padding:0;border-radius:0}
+.bubble code{background:var(--bg3);border-radius:3px;padding:.1em .35em;font-family:monospace;font-size:13px}
+/* copy button */
+.copy-btn{position:absolute;top:6px;right:6px;background:var(--bg2);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;opacity:0;transition:opacity .15s,color .15s}
+pre:hover .copy-btn{opacity:1}
+.copy-btn:hover{color:var(--text)}
+.msg-meta{font-size:11px;color:var(--muted);padding:0 4px}
+.cursor{display:inline-block;width:2px;height:1em;background:var(--accent);animation:blink .8s step-end infinite;vertical-align:text-bottom;margin-left:1px}
+@keyframes blink{50%{opacity:0}}
+
+/* ── Stats bar (per-request, below messages) ── */
+#stats-bar{min-height:28px;padding:4px 16px;display:flex;align-items:center;gap:16px;background:var(--bg2);border-top:1px solid var(--border);font-size:12px;color:var(--muted);flex-shrink:0}
+.stat{display:flex;align-items:center;gap:5px}
+.stat-val{color:var(--text);font-family:var(--font)}
+
+/* ── Input row ── */
+#input-row{display:flex;gap:8px;padding:12px 16px;background:var(--bg2);border-top:1px solid var(--border);flex-shrink:0}
+#prompt-input{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:var(--radius);font-size:14px;resize:none;height:44px;line-height:1.4;font-family:inherit;transition:border-color .2s}
+#prompt-input:focus{outline:none;border-color:var(--accent)}
+#prompt-input::placeholder{color:var(--muted)}
+#send-btn{background:var(--accent);border:none;color:#fff;padding:0 18px;border-radius:var(--radius);font-size:15px;cursor:pointer;font-weight:600;transition:background .15s;flex-shrink:0;height:44px}
+#send-btn:hover:not(:disabled){background:var(--accent2)}
+#send-btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* ── Empty state ── */
+#empty{text-align:center;margin:auto;color:var(--muted);font-size:14px;padding:40px 20px;display:flex;flex-direction:column;gap:8px}
+#empty strong{color:var(--text);font-size:18px}
+
+/* ── Error toast ── */
+#toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#7f1d1d;border:1px solid #f87171;color:#fecaca;padding:10px 20px;border-radius:8px;font-size:13px;display:none;z-index:99;max-width:90vw;text-align:center}
+#toast.show{display:block}
+
+/* ── System-Prompt Dialog (QW-2) ── */
+dialog#system-prompt-dialog{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:24px;max-width:560px;width:90vw}
+dialog#system-prompt-dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog#system-prompt-dialog h2{font-size:15px;margin-bottom:12px;color:var(--text)}
+#sp-textarea{width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:10px 12px;font-size:13px;font-family:inherit;resize:vertical;min-height:120px;line-height:1.5}
+#sp-textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+.dialog-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.dialog-actions button{padding:7px 16px;border-radius:6px;border:none;font-size:13px;cursor:pointer}
+#sp-cancel{background:var(--bg3);color:var(--muted);border:1px solid var(--border)}
+#sp-cancel:hover{color:var(--text)}
+#sp-save{background:var(--accent);color:#fff}
+#sp-save:hover{background:var(--accent2)}
+
+/* ── Mobile ── */
+@media(max-width:600px){
+  #session-wrap{display:none}
+  #logo span{display:none}
+  #messages{padding:10px}
+  #input-row{padding:8px 10px}
+  .msg{max-width:96%}
+  #health-bar{font-size:10.5px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <div id="logo">Air<span>PI</span></div>
+    <select id="model-select"><option value="">Lade Modelle…</option></select>
+    <div id="session-wrap">
+      <span id="session-label">Session:</span>
+      <input id="session-input" type="text" value="default" placeholder="default" spellcheck="false">
+    </div>
+    <!-- QW-2: System-Prompt gear -->
+    <button class="hdr-btn" id="gear-btn" title="System-Prompt">&#9881;&#65039;</button>
+    <!-- QW-3: Export -->
+    <div id="export-wrap">
+      <button class="hdr-btn" id="export-btn" title="Chat exportieren">&#128190;</button>
+      <div id="export-menu">
+        <button id="export-md">Als .md</button>
+        <button id="export-json">Als .json</button>
+      </div>
+    </div>
+    <div id="status-dot" title="Server-Status"></div>
+  </div>
+
+  <!-- QW-4: Health stats bar -->
+  <div id="health-bar">
+    <span id="hb-model">Modell: &#8212;</span>
+    <span class="hb-sep">|</span>
+    <span id="hb-queue">Queue: &#8212;</span>
+    <span class="hb-sep">|</span>
+    <span id="hb-cache">Cache-Hits: &#8212;</span>
+    <span class="hb-sep">|</span>
+    <span id="hb-tps">&#8212; tok/s</span>
+  </div>
+
+  <div id="messages">
+    <div id="empty">
+      <strong>AirPI</strong>
+      <span>LLM Inference auf dem Raspberry Pi</span>
+      <span>W&#228;hle ein Modell und starte die Konversation.</span>
+    </div>
+  </div>
+
+  <div id="stats-bar">
+    <span id="stats-placeholder" style="color:var(--muted)">Noch keine Anfrage.</span>
+    <span id="stats-content" style="display:none">
+      <span class="stat">Tokens: <span class="stat-val" id="s-tokens">&#8212;</span></span>
+      <span class="stat" style="margin-left:12px">Tok/s: <span class="stat-val" id="s-tps">&#8212;</span></span>
+      <span class="stat" style="margin-left:12px">Dauer: <span class="stat-val" id="s-dur">&#8212;</span></span>
+    </span>
+  </div>
+
+  <div id="input-row">
+    <textarea id="prompt-input" placeholder="Nachricht eingeben&#8230; (Enter senden, Shift+Enter Zeilenumbruch)" rows="1"></textarea>
+    <button id="send-btn">&#9658;</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- QW-2: System-Prompt Dialog -->
+<dialog id="system-prompt-dialog">
+  <h2>System-Prompt</h2>
+  <textarea id="sp-textarea" placeholder="Gib hier den System-Prompt ein&#8230;"></textarea>
+  <div class="dialog-actions">
+    <button id="sp-cancel">Abbrechen</button>
+    <button id="sp-save">Speichern</button>
+  </div>
+</dialog>
+
+<script>
+(function(){
+'use strict';
+
+const BASE = '';  // same origin
+const LIVE_INTERVAL = 10000;  // ms
+const HEALTH_INTERVAL = 5000; // QW-4: poll /health every 5s
+
+// ── Markdown setup (QW-1) ────────────────────────────────────────────────────
+if (typeof marked !== 'undefined') {
+  marked.setOptions({ gfm: true, breaks: true });
+}
+
+function renderMarkdown(text) {
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return null;
+  try {
+    return DOMPurify.sanitize(marked.parse(text));
+  } catch { return null; }
+}
+
+function addCopyButtons(bubble) {
+  bubble.querySelectorAll('pre').forEach(function(pre) {
+    if (pre.querySelector('.copy-btn')) return;
+    var btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'Kopieren';
+    btn.addEventListener('click', function() {
+      var code = pre.querySelector('code');
+      var text = code ? code.textContent : pre.textContent;
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = '✓ Kopiert';
+        setTimeout(function() { btn.textContent = 'Kopieren'; }, 2000);
+      }).catch(function() {
+        btn.textContent = '✗ Fehler';
+        setTimeout(function() { btn.textContent = 'Kopieren'; }, 2000);
+      });
+    });
+    pre.style.position = 'relative';
+    pre.appendChild(btn);
+  });
+}
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+var modelSel   = document.getElementById('model-select');
+var sessionInp = document.getElementById('session-input');
+var statusDot  = document.getElementById('status-dot');
+var msgList    = document.getElementById('messages');
+var statsPlh   = document.getElementById('stats-placeholder');
+var statsCnt   = document.getElementById('stats-content');
+var sTok       = document.getElementById('s-tokens');
+var sTps       = document.getElementById('s-tps');
+var sDur       = document.getElementById('s-dur');
+var promptInp  = document.getElementById('prompt-input');
+var sendBtn    = document.getElementById('send-btn');
+var toast      = document.getElementById('toast');
+
+// QW-2 refs
+var gearBtn    = document.getElementById('gear-btn');
+var spDialog   = document.getElementById('system-prompt-dialog');
+var spTextarea = document.getElementById('sp-textarea');
+var spCancel   = document.getElementById('sp-cancel');
+var spSave     = document.getElementById('sp-save');
+
+// QW-3 refs
+var exportBtn  = document.getElementById('export-btn');
+var exportMenu = document.getElementById('export-menu');
+var exportMd   = document.getElementById('export-md');
+var exportJson = document.getElementById('export-json');
+
+// QW-4 refs
+var hbModel    = document.getElementById('hb-model');
+var hbQueue    = document.getElementById('hb-queue');
+var hbCache    = document.getElementById('hb-cache');
+var hbTps      = document.getElementById('hb-tps');
+
+// ── State ─────────────────────────────────────────────────────────────────────
+var busy = false;
+
+// ── QW-2: System-Prompt state ─────────────────────────────────────────────────
+var SP_KEY = 'airpi_system_prompt';
+var DEFAULT_SYSTEM = 'Du bist AirPI, ein hilfreicher lokaler KI-Assistent auf einem Raspberry Pi. Antworte präzise und auf Deutsch wenn der User Deutsch spricht. Antworte NIEMALS mit mehr als 3-4 Sätzen außer du wirst explizit um mehr gebeten.';
+
+function getSystemPrompt() {
+  var saved = localStorage.getItem(SP_KEY);
+  return (saved !== null) ? saved : DEFAULT_SYSTEM;
+}
+
+// ── Chat history ──────────────────────────────────────────────────────────────
+var chatHistory = [];
+var lastModel = null;
+
+function buildInitialHistory() {
+  var sp = getSystemPrompt();
+  return sp ? [{ role: 'system', content: sp }] : [];
+}
+
+function resetChatHistory() {
+  chatHistory = buildInitialHistory();
+  // Clear visible messages
+  msgList.innerHTML = '';
+  var empty = document.createElement('div');
+  empty.id = 'empty';
+  empty.innerHTML = '<strong>AirPI</strong><span>LLM Inference auf dem Raspberry Pi</span><span>Wähle ein Modell und starte die Konversation.</span>';
+  msgList.appendChild(empty);
+  statsPlh.style.display = '';
+  statsCnt.style.display = 'none';
+}
+
+chatHistory = buildInitialHistory();
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function() { toast.classList.remove('show'); }, 4000);
+}
+
+function formatSize(bytes) {
+  if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+  if (bytes >= 1e6) return (bytes / 1e6).toFixed(0) + ' MB';
+  return bytes + ' B';
+}
+
+function scrollToBottom() {
+  msgList.scrollTop = msgList.scrollHeight;
+}
+
+function hideEmpty() {
+  var e = document.getElementById('empty');
+  if (e) e.style.display = 'none';
+}
+
+// ── QW-2: System-Prompt dialog ────────────────────────────────────────────────
+gearBtn.addEventListener('click', function() {
+  spTextarea.value = getSystemPrompt();
+  spDialog.showModal();
+});
+
+spCancel.addEventListener('click', function() { spDialog.close(); });
+
+spSave.addEventListener('click', function() {
+  var val = spTextarea.value.trim();
+  localStorage.setItem(SP_KEY, val);
+  spDialog.close();
+  lastModel = null;
+  resetChatHistory();
+  showToast('System-Prompt gespeichert — Verlauf zurückgesetzt.');
+});
+
+spDialog.addEventListener('click', function(e) {
+  if (e.target === spDialog) spDialog.close();
+});
+
+// ── QW-3: Export ──────────────────────────────────────────────────────────────
+exportBtn.addEventListener('click', function(e) {
+  e.stopPropagation();
+  exportMenu.classList.toggle('open');
+});
+
+document.addEventListener('click', function() { exportMenu.classList.remove('open'); });
+
+function downloadFile(content, filename, type) {
+  var blob = new Blob([content], { type: type });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+function getTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+}
+
+exportMd.addEventListener('click', function() {
+  exportMenu.classList.remove('open');
+  var msgs = chatHistory.filter(function(m) { return m.role !== 'system'; });
+  if (!msgs.length) { showToast('Kein Chatverlauf zum Exportieren.'); return; }
+  var lines = [];
+  msgs.forEach(function(m) {
+    lines.push('## ' + (m.role === 'user' ? 'User' : 'AirPI'));
+    lines.push('');
+    lines.push(m.content);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  });
+  downloadFile(lines.join('\n'), 'airpi-chat-' + getTimestamp() + '.md', 'text/markdown');
+});
+
+exportJson.addEventListener('click', function() {
+  exportMenu.classList.remove('open');
+  var msgs = chatHistory.filter(function(m) { return m.role !== 'system'; });
+  if (!msgs.length) { showToast('Kein Chatverlauf zum Exportieren.'); return; }
+  downloadFile(JSON.stringify(msgs, null, 2), 'airpi-chat-' + getTimestamp() + '.json', 'application/json');
+});
+
+// ── QW-4: Health polling ──────────────────────────────────────────────────────
+function dash(v) {
+  return (v === null || v === undefined || v === '') ? '—' : v;
+}
+
+async function pollHealth() {
+  try {
+    var r = await fetch(BASE + '/health', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    var d = await r.json();
+
+    var model = d.model || d.loaded_model || d.current_model || null;
+    var queue = (d.queue_depth !== undefined) ? d.queue_depth : ((d.queue !== undefined) ? d.queue : null);
+    var cacheHit = (d.cache_hit_rate !== undefined) ? d.cache_hit_rate : ((d.cache_hits !== undefined) ? d.cache_hits : null);
+    var tps = (d.tokens_per_second !== undefined) ? d.tokens_per_second : ((d.tps !== undefined) ? d.tps : null);
+
+    hbModel.textContent = 'Modell: ' + dash(model);
+    hbQueue.textContent = 'Queue: ' + (queue !== null ? queue : '—');
+    if (cacheHit !== null) {
+      var pct = parseFloat(cacheHit);
+      if (pct <= 1) pct = pct * 100;
+      hbCache.textContent = 'Cache-Hits: ' + pct.toFixed(1) + '%';
+    } else {
+      hbCache.textContent = 'Cache-Hits: —';
+    }
+    hbTps.textContent = (tps !== null ? parseFloat(tps).toFixed(1) : '—') + ' tok/s';
+  } catch (_) {
+    // silently ignore
+  }
+}
+
+// ── Status check ──────────────────────────────────────────────────────────────
+async function checkLive() {
+  try {
+    var r = await fetch(BASE + '/live', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      statusDot.className = 'online';
+      statusDot.title = 'Server online';
+    } else {
+      statusDot.className = 'offline';
+      statusDot.title = 'Server Fehler: ' + r.status;
+    }
+  } catch (_) {
+    statusDot.className = 'offline';
+    statusDot.title = 'Server nicht erreichbar';
+  }
+}
+
+// ── Load models ───────────────────────────────────────────────────────────────
+async function loadModels() {
+  try {
+    var r = await fetch(BASE + '/api/tags', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var data = await r.json();
+    var models = data.models || [];
+    modelSel.innerHTML = '';
+    if (models.length === 0) {
+      modelSel.innerHTML = '<option value="">Keine Modelle gefunden</option>';
+      return;
+    }
+    models.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m.name;
+      var size = m.size ? ' (' + formatSize(m.size) + ')' : '';
+      var loaded = m.details && m.details.loaded ? ' ●' : '';
+      opt.textContent = m.name + size + loaded;
+      modelSel.appendChild(opt);
+    });
+  } catch (e) {
+    modelSel.innerHTML = '<option value="">Fehler beim Laden</option>';
+    console.error('loadModels:', e);
+  }
+}
+
+// ── Message rendering ─────────────────────────────────────────────────────────
+function appendMessage(role, text) {
+  hideEmpty();
+  var wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+
+  var meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = role === 'user' ? 'Du' : 'AirPI';
+
+  wrap.appendChild(meta);
+  wrap.appendChild(bubble);
+  msgList.appendChild(wrap);
+  scrollToBottom();
+  return bubble;
+}
+
+function createAssistantBubble() {
+  hideEmpty();
+  var wrap = document.createElement('div');
+  wrap.className = 'msg assistant';
+
+  var meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = 'AirPI';
+
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble streaming';
+
+  var cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  bubble.appendChild(cursor);
+
+  wrap.appendChild(meta);
+  wrap.appendChild(bubble);
+  msgList.appendChild(wrap);
+  scrollToBottom();
+  return { bubble: bubble, cursor: cursor };
+}
+
+// ── Stats display ─────────────────────────────────────────────────────────────
+function showStats(evalCount, evalDurationNs) {
+  statsPlh.style.display = 'none';
+  statsCnt.style.display = '';
+  var tps = evalDurationNs > 0 ? (evalCount / (evalDurationNs / 1e9)).toFixed(1) : '?';
+  var durMs = evalDurationNs > 0 ? (evalDurationNs / 1e6).toFixed(0) : '?';
+  sTok.textContent = evalCount;
+  sTps.textContent = tps;
+  sDur.textContent = durMs + ' ms';
+}
+
+// ── Spezial-Befehle (Merke/Vergiss/Memory) ───────────────────────────────────
+async function handleSpecialCommand(text) {
+  var lower = text.toLowerCase();
+
+  if (lower.startsWith('merke:')) {
+    var fact = text.slice(6).trim();
+    if (!fact) return false;
+    appendMessage('user', text);
+    try {
+      await fetch('/memory/store', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({content: fact, category:'fact'}) });
+      var bubble = document.createElement('div');
+      bubble.className = 'msg assistant';
+      bubble.innerHTML = '<span style="color:var(--green)">✓ Gespeichert:</span> ' + fact;
+      msgList.appendChild(bubble);
+      scrollToBottom();
+    } catch(e) { showToast('Speichern fehlgeschlagen: ' + e.message); }
+    return true;
+  }
+
+  if (lower.startsWith('vergiss:')) {
+    var kw = text.slice(8).trim();
+    if (!kw) return false;
+    appendMessage('user', text);
+    try {
+      var r = await fetch('/memory/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({keyword: kw}) });
+      var d = await r.json();
+      var bubble2 = document.createElement('div');
+      bubble2.className = 'msg assistant';
+      bubble2.innerHTML = '<span style="color:var(--green)">✓ Entfernt</span> (' + (d.deleted || 0) + ' Einträge mit "<em>' + kw + '</em>")';
+      msgList.appendChild(bubble2);
+      scrollToBottom();
+    } catch(e) { showToast('Löschen fehlgeschlagen: ' + e.message); }
+    return true;
+  }
+
+  if (lower === 'memory?' || lower === 'memory' || lower === 'was weißt du?') {
+    appendMessage('user', text);
+    try {
+      var r2 = await fetch('/memory');
+      var d2 = await r2.json();
+      var bubble3 = document.createElement('div');
+      bubble3.className = 'msg assistant';
+      bubble3.style.whiteSpace = 'pre-wrap';
+      bubble3.textContent = d2.content || '(Noch keine Erinnerungen)';
+      msgList.appendChild(bubble3);
+      scrollToBottom();
+    } catch(e) { showToast('Memory laden fehlgeschlagen'); }
+    return true;
+  }
+
+  return false;
+}
+
+// ── Streaming chat ────────────────────────────────────────────────────────────
+async function sendMessage() {
+  var promptText = promptInp.value.trim();
+  if (!promptText || busy) return;
+
+  var model = modelSel.value;
+  if (!model) {
+    showToast('Bitte ein Modell auswählen.');
+    return;
+  }
+
+  // Modellwechsel → History und Session zurücksetzen
+  if (lastModel && lastModel !== model) {
+    chatHistory = buildInitialHistory();
+    showToast('Modell gewechselt — Verlauf zurückgesetzt.');
+  }
+  lastModel = model;
+
+  promptInp.value = '';
+
+  // Spezial-Befehle abfangen BEVOR sie ans LLM gehen
+  if (await handleSpecialCommand(promptText)) return;
+
+  var sessionId = sessionInp.value.trim() || 'default';
+
+  busy = true;
+  sendBtn.disabled = true;
+  promptInp.disabled = true;
+
+  chatHistory.push({ role: 'user', content: promptText });
+  appendMessage('user', promptText);
+
+  var result = createAssistantBubble();
+  var bubble = result.bubble;
+  var cursor = result.cursor;
+  var accText = '';
+
+  // Build request body with optional system prompt (QW-2)
+  var reqBody = {
+    model: model,
+    messages: chatHistory,
+    session_id: sessionId,
+    stream: true,
+    max_tokens: 512,
+  };
+  var sp = getSystemPrompt();
+  if (sp) reqBody.system = sp;
+
+  try {
+    var resp = await fetch(BASE + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+    });
+
+    if (!resp.ok) {
+      var errMsg = 'HTTP ' + resp.status;
+      try { var j = await resp.json(); errMsg = (j && j.error && j.error.message) ? j.error.message : errMsg; } catch (_) {}
+      throw new Error(errMsg);
+    }
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buf = '';
+    var finalEvalCount = 0;
+    var finalEvalDuration = 0;
+
+    while (true) {
+      var read = await reader.read();
+      if (read.done) break;
+
+      buf += decoder.decode(read.value, { stream: true });
+      var lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (var i = 0; i < lines.length; i++) {
+        var trimmed = lines[i].trim();
+        if (!trimmed) continue;
+        var chunk;
+        try { chunk = JSON.parse(trimmed); } catch (_) { continue; }
+
+        if (chunk.error) {
+          throw new Error((chunk.error && chunk.error.message) ? chunk.error.message : 'Stream-Fehler');
+        }
+
+        var token = (chunk.message && chunk.message.content) ? chunk.message.content : '';
+        if (token) {
+          accText += token;
+          // QW-1: during streaming use plain text to avoid flicker
+          bubble.textContent = accText;
+          bubble.appendChild(cursor);
+          scrollToBottom();
+        }
+
+        if (chunk.done) {
+          finalEvalCount = chunk.eval_count || 0;
+          finalEvalDuration = chunk.eval_duration || 0;
+        }
+      }
+    }
+
+    // QW-1: stream done → render markdown
+    cursor.remove();
+    var finalText = accText || '(keine Antwort)';
+    var html = renderMarkdown(finalText);
+    if (html) {
+      bubble.innerHTML = html;
+      bubble.classList.remove('streaming');
+      bubble.classList.add('rendered');
+      addCopyButtons(bubble);
+    } else {
+      bubble.textContent = finalText;
+    }
+
+    if (accText) chatHistory.push({ role: 'assistant', content: accText });
+    scrollToBottom();
+
+    if (finalEvalCount > 0) {
+      showStats(finalEvalCount, finalEvalDuration);
+    }
+
+  } catch (err) {
+    cursor.remove();
+    chatHistory.pop(); // remove failed user message
+    if (accText) {
+      bubble.textContent = accText + '\n\n[Fehler: ' + err.message + ']';
+    } else {
+      bubble.textContent = 'Fehler: ' + err.message;
+      bubble.style.color = 'var(--red)';
+    }
+    showToast('Fehler: ' + err.message);
+    scrollToBottom();
+  } finally {
+    busy = false;
+    sendBtn.disabled = false;
+    promptInp.disabled = false;
+    promptInp.focus();
+  }
+}
+
+// ── Input handling ────────────────────────────────────────────────────────────
+promptInp.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// Auto-resize textarea (up to ~5 lines)
+promptInp.addEventListener('input', function() {
+  promptInp.style.height = 'auto';
+  promptInp.style.height = Math.min(promptInp.scrollHeight, 120) + 'px';
+});
+
+sendBtn.addEventListener('click', sendMessage);
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkLive();
+loadModels();
+pollHealth();
+setInterval(checkLive, LIVE_INTERVAL);
+setInterval(pollHealth, HEALTH_INTERVAL);
+
+})();
+</script>
+</body>
+</html>

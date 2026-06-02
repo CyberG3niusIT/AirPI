@@ -25,11 +25,14 @@ from typing import AsyncGenerator
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 import config
 from model_manager import build_json_grammar, manager, select_model_for_prompt
+from memory.manager import get_memory_manager
+from memory.graph import GraphBuilder
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -72,6 +75,48 @@ class RuntimeMetrics:
 
 
 metrics = RuntimeMetrics()
+_server_start = time.monotonic()
+
+
+def _parse_extraction(raw: str) -> list:
+    """Robust JSON array extraction from LLM output (Fix A1).
+
+    Tries three strategies before giving up:
+    1. Direct json.loads of the stripped string.
+    2. Non-greedy regex to find the first [...] block.
+    3. Greedy regex for nested/multi-line arrays.
+    Returns [] on any failure — never raises.
+    """
+    if not raw or not raw.strip():
+        return []
+    text = raw.strip()
+    # Strategy 1: direct parse
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return result
+        return []
+    except json.JSONDecodeError:
+        pass
+    # Strategy 2: non-greedy regex
+    m = re.search(r"\[.*?\]", text, re.DOTALL)
+    if m:
+        try:
+            result = json.loads(m.group())
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            pass
+    # Strategy 3: greedy regex
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if m:
+        try:
+            result = json.loads(m.group())
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            pass
+    return []
 
 
 def _error_payload(code: str, message: str, retryable: bool, request_id: str) -> dict:
@@ -116,6 +161,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+_UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
+if os.path.isdir(_UI_DIR):
+    app.mount("/ui", StaticFiles(directory=_UI_DIR, html=True), name="ui")
 
 
 @app.exception_handler(RequestValidationError)
@@ -233,11 +282,17 @@ async def live() -> dict:
 @app.get("/health")
 async def health() -> dict:
     runtime = manager.runtime_status()
+    cache_hit_rate: float | None = None
+    if metrics.requests_total > 0:
+        cache_hit_rate = metrics.cache_hit_total / metrics.requests_total
     return {
         "status": "ok",
         **runtime,
         "queue_depth": _queue_depth,
         "max_queue": config.MAX_QUEUE,
+        "uptime_seconds": round(time.monotonic() - _server_start, 2),
+        "tokens_generated_total": metrics.tokens_total,
+        "cache_hit_rate": cache_hit_rate,
     }
 
 
@@ -538,6 +593,128 @@ async def _stream_generate(
         }) + "\n").encode()
     finally:
         _queue_depth -= 1
+
+
+
+
+# ── Memory Endpoints ─────────────────────────────────────────────────────────
+
+class MemoryStoreRequest(BaseModel):
+    content: str = Field(min_length=1)
+    category: str = "fact"
+
+
+class MemoryDeleteRequest(BaseModel):
+    keyword: str = Field(min_length=1)
+
+
+@app.post("/memory/store")
+async def memory_store(request: MemoryStoreRequest) -> dict:
+    """Speichert einen Fakt manuell."""
+    try:
+        get_memory_manager().store_fact(request.content, source="user", category=request.category)
+        return {"ok": True, "content": request.content}
+    except Exception as exc:
+        logger.exception("memory/store failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.post("/memory/delete")
+async def memory_delete(request: MemoryDeleteRequest) -> dict:
+    """Markiert alle Eintraege mit keyword als inaktiv."""
+    try:
+        count = get_memory_manager().delete_fact(request.keyword)
+        return {"ok": True, "deleted": count, "keyword": request.keyword}
+    except Exception as exc:
+        logger.exception("memory/delete failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+@app.get("/memory")
+async def memory_get() -> dict:
+    """Gibt den aktuellen Memory-Inhalt zurueck."""
+    try:
+        mem = get_memory_manager()
+        return {
+            "content": mem.get_context(),
+            "entries": mem.all_active(),
+        }
+    except Exception as exc:
+        logger.exception("memory GET failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+# ── Graph Endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/graph")
+async def graph_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/ui/graph.html", status_code=307)
+
+
+@app.get("/graph/data")
+async def graph_data() -> dict:
+    try:
+        entries = get_memory_manager().all_active()
+        return GraphBuilder().build(entries)
+    except Exception as exc:
+        logger.exception("graph/data failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+# ── Chat Endpoint (/api/chat — Ollama-kompatibel) ────────────────────────────
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    model: str = Field(default="")
+    messages: list[ChatMessage]
+    stream: bool = False
+    max_tokens: int = Field(default=512, ge=1, le=8192)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    system: str = ""
+
+
+class ChatResponse(BaseModel):
+    model: str
+    message: dict
+    done: bool
+
+
+def _apply_chatml(messages: list[ChatMessage]) -> str:
+    parts = []
+    for msg in messages:
+        parts.append(f"<|im_start|>{msg.role}\n{msg.content}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "\n".join(parts)
+
+
+@app.post("/api/chat")
+async def api_chat(request: ChatRequest) -> dict:
+    last_content = request.messages[-1].content if request.messages else ""
+    preferred = request.model or None
+    model_name = select_model_for_prompt(last_content, preferred)
+    prompt = _apply_chatml(request.messages)
+    try:
+        result = await manager.generate(
+            model_name,
+            prompt,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            top_p=0.95,
+            stop=["<|im_end|>", "<|im_start|>"],
+        )
+    except Exception as exc:
+        logger.exception("api/chat inference failed")
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+    choices = result.get("choices", [{}])
+    text = choices[0].get("text", "") if choices else ""
+    return {
+        "model": model_name,
+        "message": {"role": "assistant", "content": text},
+        "done": True,
+    }
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airpi-cli"
+version = "2.0.0"
+description = "CLI tool for AirPI — LLM Inference Server for Raspberry Pi"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "requests>=2.31",
+    "rich>=13.0",
+]
+
+[project.scripts]
+airpi = "cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (LLM inference, may take > 5s on Raspberry Pi)",
+    "integration: marks tests as integration tests requiring a live server",
+]
