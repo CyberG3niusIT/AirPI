@@ -28,7 +28,8 @@ N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "4096"))
 
 # Prompt ingestion tuning. These values are conservative for Raspberry Pi 5
 # and can be overridden from /etc/airpi/airpi.env.
-N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "4"))
+# n_threads_batch=5: Prefill nutzt 5 Kerne, Decode nutzt 3 → zusammen 8 = alle Pi-5-Kerne
+N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "5"))
 N_BATCH_SMALL: int = int(os.environ.get("AIRPI_N_BATCH_SMALL", "1024"))
 N_BATCH_LARGE: int = int(os.environ.get("AIRPI_N_BATCH_LARGE", "512"))
 N_UBATCH_SMALL: int = int(os.environ.get("AIRPI_N_UBATCH_SMALL", "512"))
@@ -63,9 +64,11 @@ MAX_SESSION_ID_LENGTH: int = int(os.environ.get("AIRPI_MAX_SESSION_ID_LENGTH", "
 INFERENCE_TIMEOUT_SMALL: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_SMALL", "120"))
 INFERENCE_TIMEOUT_LARGE: int = int(os.environ.get("AIRPI_INFERENCE_TIMEOUT_LARGE", "300"))
 
-# GGML-Typ für KV-Cache-Quantisierung. 0 = Default (F16), 8 = Q8_0 (~50% RAM)
-KV_CACHE_TYPE_K: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_K", "0"))
-KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "0"))
+# GGML-Typ für KV-Cache-Quantisierung.
+# 0 = F16 (Standard), 8 = Q8_0 (~50% weniger RAM, nahezu kein Qualitätsverlust)
+# Pi 5: Q8 empfohlen — halbiert KV-RAM, erlaubt längere Sessions ohne Paging-Overhead
+KV_CACHE_TYPE_K: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_K", "8"))
+KV_CACHE_TYPE_V: int = int(os.environ.get("AIRPI_KV_CACHE_TYPE_V", "8"))
 
 # Speculative Decoding via prompt-lookup (n-gram, zero extra RAM) oder draft model
 SPECULATIVE: bool = os.environ.get("AIRPI_SPECULATIVE", "false").lower() == "true"

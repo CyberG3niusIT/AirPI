@@ -182,6 +182,10 @@ class MemoryManager:
                 check_same_thread=False,
             )
             self._conn.row_factory = sqlite3.Row
+            # WAL-Mode: Reads blockieren Writes nicht; besser für concurrent FastAPI-Calls
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            # NORMAL ist mit WAL sicher (Daten geschützt außer bei OS-Crash/Power-Loss)
+            self._conn.execute("PRAGMA synchronous=NORMAL")
         return self._conn
 
     def _init_db(self) -> None:
@@ -189,6 +193,17 @@ class MemoryManager:
             conn = self._connect()
             conn.execute(_SCHEMA)
             conn.executescript(_GRAPH_SCHEMA)
+            # Indexes für häufige Queries (idempotent — IF NOT EXISTS)
+            # all_active(): WHERE active=1 ORDER BY created_at
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_active_created "
+                "ON memories(active, created_at)"
+            )
+            # _is_duplicate() + _touch(): WHERE active=1 AND LOWER(content)=LOWER(?)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mem_active_content "
+                "ON memories(active, content)"
+            )
             conn.commit()
         except Exception:
             logger.exception("memory: DB init failed — memory disabled for this session")

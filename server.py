@@ -12,6 +12,7 @@ Port: 11435 (Ollama: 11434)
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -41,6 +42,33 @@ logging.basicConfig(
 logger = logging.getLogger("airpi")
 
 _queue_depth: int = 0
+
+# ── Graph TTL-Cache ───────────────────────────────────────────────────────────
+
+@dataclasses.dataclass
+class _GraphCache:
+    data: dict
+    built_at: float   # time.monotonic()
+    entry_count: int  # len(all_active()) zum Zeitpunkt des Builds
+
+_graph_cache: _GraphCache | None = None
+_GRAPH_CACHE_TTL: float = 30.0  # Sekunden
+
+
+def _graph_cache_valid(entry_count: int) -> bool:
+    """True wenn Cache ≤30s alt UND Eintragsanzahl unverändert (kein Write seit letztem Build)."""
+    if _graph_cache is None:
+        return False
+    return (
+        time.monotonic() - _graph_cache.built_at < _GRAPH_CACHE_TTL
+        and _graph_cache.entry_count == entry_count
+    )
+
+
+def _invalidate_graph_cache() -> None:
+    """Cache sofort invalidieren — wird nach Memory-Writes aufgerufen."""
+    global _graph_cache
+    _graph_cache = None
 
 
 class ErrorCode:
@@ -613,6 +641,7 @@ async def memory_store(request: MemoryStoreRequest) -> dict:
     """Speichert einen Fakt manuell."""
     try:
         get_memory_manager().store_fact(request.content, source="user", category=request.category)
+        _invalidate_graph_cache()  # Graph-Cache invalidieren — neue Daten verfügbar
         return {"ok": True, "content": request.content}
     except Exception as exc:
         logger.exception("memory/store failed")
@@ -624,6 +653,8 @@ async def memory_delete(request: MemoryDeleteRequest) -> dict:
     """Markiert alle Eintraege mit keyword als inaktiv."""
     try:
         count = get_memory_manager().delete_fact(request.keyword)
+        if count > 0:
+            _invalidate_graph_cache()  # Graph-Cache invalidieren — Daten entfernt
         return {"ok": True, "deleted": count, "keyword": request.keyword}
     except Exception as exc:
         logger.exception("memory/delete failed")
@@ -635,9 +666,12 @@ async def memory_get() -> dict:
     """Gibt den aktuellen Memory-Inhalt zurueck."""
     try:
         mem = get_memory_manager()
+        # DB-Calls in Thread-Pool um Event Loop nicht zu blockieren
+        entries = await asyncio.to_thread(mem.all_active)
+        context = await asyncio.to_thread(mem.get_context)
         return {
-            "content": mem.get_context(),
-            "entries": mem.all_active(),
+            "content": context,
+            "entries": entries,
         }
     except Exception as exc:
         logger.exception("memory GET failed")
@@ -716,16 +750,30 @@ async def graph_redirect() -> RedirectResponse:
 
 @app.get("/graph/data")
 async def graph_data() -> dict:
+    global _graph_cache
     try:
         mem = get_memory_manager()
-        entries = mem.all_active()
-        graph = GraphBuilder().build(entries)
-        return merge_graph_overlays(
+        # DB-Call in Thread-Pool um Event Loop nicht zu blockieren
+        entries = await asyncio.to_thread(mem.all_active)
+
+        # Cache-Hit: Graph innerhalb TTL und keine neuen Entries
+        if _graph_cache_valid(len(entries)):
+            return _graph_cache.data
+
+        # Cache-Miss: Graph vollständig aufbauen (in Thread-Pool)
+        graph = await asyncio.to_thread(GraphBuilder().build, entries)
+        result = merge_graph_overlays(
             graph,
             manual_edges=mem.list_manual_edges(),
             manual_nodes=mem.list_manual_nodes(),
             edge_overrides=mem.list_edge_overrides(),
         )
+        _graph_cache = _GraphCache(
+            data=result,
+            built_at=time.monotonic(),
+            entry_count=len(entries),
+        )
+        return result
     except Exception as exc:
         logger.exception("graph/data failed")
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
