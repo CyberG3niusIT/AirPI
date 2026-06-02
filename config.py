@@ -28,8 +28,9 @@ N_CTX_LARGE: int = int(os.environ.get("AIRPI_N_CTX_LARGE", "4096"))
 
 # Prompt ingestion tuning. These values are conservative for Raspberry Pi 5
 # and can be overridden from /etc/airpi/airpi.env.
-# n_threads_batch=5: Prefill nutzt 5 Kerne, Decode nutzt 3 → zusammen 8 = alle Pi-5-Kerne
-N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "5"))
+# n_threads_batch=4: Bewährter Wert für Pi 5. 5 getestet — llama_decode Fehler bei 3+5=8 Threads.
+# 3 (decode) + 4 (batch) = 7 Threads lässt 1 Kern frei für OS/uvicorn.
+N_THREADS_BATCH: int = int(os.environ.get("AIRPI_N_THREADS_BATCH", "4"))
 N_BATCH_SMALL: int = int(os.environ.get("AIRPI_N_BATCH_SMALL", "1024"))
 N_BATCH_LARGE: int = int(os.environ.get("AIRPI_N_BATCH_LARGE", "512"))
 N_UBATCH_SMALL: int = int(os.environ.get("AIRPI_N_UBATCH_SMALL", "512"))
