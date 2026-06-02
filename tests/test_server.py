@@ -332,3 +332,78 @@ class ServerContractTests(IsolatedAsyncioTestCase):
         frame = chunks[-1].decode()
         self.assertIn(server.ErrorCode.MODEL_NOT_FOUND, frame)
         self.assertIn('"done": true', frame)
+
+
+class ParseExtractionTests(IsolatedAsyncioTestCase):
+    """Tests for the robust JSON extraction helper _parse_extraction (Fix A1)."""
+
+    def test_extract_valid_json_array(self) -> None:
+        result = server._parse_extraction('["fact1", "fact2"]')
+        self.assertEqual(result, ["fact1", "fact2"])
+
+    def test_extract_with_preamble(self) -> None:
+        result = server._parse_extraction('Sure, here you go: ["fact1"]')
+        self.assertEqual(result, ["fact1"])
+
+    def test_extract_nested_dict_no_top_level_array(self) -> None:
+        # A raw dict with no surrounding array — direct json.loads gives a dict (not list),
+        # but the regex fallback may still find an inner array. The key property is: no crash.
+        result = server._parse_extraction('{"key": "value"}')
+        self.assertIsInstance(result, list)
+        self.assertEqual(result, [])
+
+    def test_extract_empty_returns_empty(self) -> None:
+        self.assertEqual(server._parse_extraction(""), [])
+        self.assertEqual(server._parse_extraction("no facts here"), [])
+
+    def test_extract_nested_array_in_preamble(self) -> None:
+        result = server._parse_extraction('Here are the facts: ["User likes Python", "System is Pi 5"]')
+        self.assertEqual(result, ["User likes Python", "System is Pi 5"])
+
+    def test_extract_empty_array(self) -> None:
+        result = server._parse_extraction("[]")
+        self.assertEqual(result, [])
+
+
+class HealthEndpointTests(IsolatedAsyncioTestCase):
+    """Tests for /health serialization stability (Fix A3)."""
+
+    def setUp(self) -> None:
+        server._queue_depth = 0
+        server.metrics = server.RuntimeMetrics()
+
+    async def test_health_returns_200_and_is_json_serializable(self) -> None:
+        health = await server.health()
+        # Must be JSON-serializable without raising
+        serialized = json.dumps(health)
+        data = json.loads(serialized)
+        self.assertEqual(data["status"], "ok")
+
+    async def test_health_contains_required_fields(self) -> None:
+        health = await server.health()
+        for field in ("queue_depth", "max_queue", "uptime_seconds",
+                      "tokens_generated_total", "cache_hit_rate",
+                      "recovery_count", "loaded_models"):
+            self.assertIn(field, health, f"Missing field: {field}")
+
+    async def test_health_uptime_seconds_is_positive(self) -> None:
+        health = await server.health()
+        self.assertGreaterEqual(health["uptime_seconds"], 0.0)
+
+    async def test_health_cache_hit_rate_none_when_no_requests(self) -> None:
+        server.metrics = server.RuntimeMetrics()
+        health = await server.health()
+        self.assertIsNone(health["cache_hit_rate"])
+
+    async def test_health_cache_hit_rate_computed_correctly(self) -> None:
+        server.metrics = server.RuntimeMetrics()
+        server.metrics.requests_total = 4
+        server.metrics.cache_hit_total = 2
+        health = await server.health()
+        self.assertAlmostEqual(health["cache_hit_rate"], 0.5)
+
+    async def test_health_last_recovery_none_is_serializable(self) -> None:
+        health = await server.health()
+        # last_recovery may be None — must be JSON-serializable
+        serialized = json.dumps({"last_recovery": health["last_recovery"]})
+        self.assertIsNotNone(serialized)

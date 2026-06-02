@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -33,6 +34,7 @@ from config import (
     N_UBATCH_LARGE,
     N_UBATCH_SMALL,
     SESSION_TTL,
+    SESSIONS_DB_PATH,
     SPECULATIVE,
     SPECULATIVE_DRAFT_MODEL,
 )
@@ -64,6 +66,27 @@ def _is_large_model(model_name: str) -> bool:
 
 def _inference_timeout(model_name: str) -> int:
     return INFERENCE_TIMEOUT_LARGE if _is_large_model(model_name) else INFERENCE_TIMEOUT_SMALL
+
+
+# Bekannte Tokenizer-Familien. Nur Modelle aus derselben Familie teilen kompatible
+# Token-ID-Räume und dürfen als Draft-Target-Paare verwendet werden.
+_TOKENIZER_FAMILIES: tuple[frozenset[str], ...] = (
+    frozenset({"qwen", "qwen2", "qwen2.5"}),
+    frozenset({"gemma", "gemma2", "gemma3", "gemma-3"}),
+    frozenset({"llama", "llama2", "llama3"}),
+    frozenset({"mistral", "mixtral"}),
+    frozenset({"phi", "phi2", "phi3"}),
+)
+
+
+def _same_tokenizer_family(name_a: str, name_b: str) -> bool:
+    """True wenn beide Modellnamen zur gleichen Tokenizer-Familie gehören."""
+    lower_a = name_a.lower()
+    lower_b = name_b.lower()
+    for family in _TOKENIZER_FAMILIES:
+        if any(f in lower_a for f in family) and any(f in lower_b for f in family):
+            return True
+    return False
 
 
 def validate_model_name(model_name: str) -> str:
@@ -120,6 +143,39 @@ def build_json_grammar(required_keys: list[str] | None) -> "Any | None":
         return LlamaGrammar.from_json_schema(_json.dumps(schema), verbose=False)
     except Exception:
         return None
+
+
+def apply_chat_template(llm: "Llama", messages: list[dict]) -> str:
+    """Wandelt messages[] mit dem modell-eigenen Jinja2-Template in einen Prompt-String um.
+
+    Liest das Template aus dem GGUF-Metadata-Feld tokenizer.chat_template.
+    Fallback: ChatML-Format (funktioniert für Qwen, Llama3, Mistral).
+    """
+    template_str = (llm.metadata or {}).get("tokenizer.chat_template")
+    if template_str:
+        try:
+            from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+            eos_id = int((llm.metadata or {}).get("tokenizer.ggml.eos_token_id", "0"))
+            eos_token = llm.detokenize([eos_id]).decode("utf-8", errors="ignore")
+            formatter = Jinja2ChatFormatter(
+                template=template_str,
+                eos_token=eos_token,
+                bos_token="",
+                add_generation_prompt=True,
+            )
+            result = formatter(messages=messages, functions=None, function_call=None)
+            return result.prompt
+        except Exception as exc:
+            logger.warning("chat template application failed, using ChatML fallback: %s", exc)
+
+    # ChatML-Fallback (Qwen, viele andere Modelle)
+    parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "\n".join(parts)
 
 
 def select_model_for_prompt(prompt: str, preferred_model: str | None = None) -> str:
@@ -271,6 +327,28 @@ class LlamaModelDraft:
         return np.array(draft_tokens, dtype=np.intc)
 
 
+# ── Session DB helpers ────────────────────────────────────────────────────────
+
+def _resolve_db_path() -> str:
+    """Gibt den nutzbaren DB-Pfad zurück: bevorzugt /opt/airpi, Fallback /tmp."""
+    primary = Path(SESSIONS_DB_PATH)
+    try:
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        # Prüfe ob das Verzeichnis beschreibbar ist
+        test_file = primary.parent / ".airpi_write_test"
+        test_file.touch()
+        test_file.unlink()
+        return str(primary)
+    except OSError:
+        fallback = "/tmp/airpi_sessions.db"
+        logger.warning(
+            "sessions db: cannot write to %s — using fallback %s",
+            primary.parent,
+            fallback,
+        )
+        return fallback
+
+
 # ── Model Manager ─────────────────────────────────────────────────────────────
 
 class ModelManager:
@@ -297,6 +375,104 @@ class ModelManager:
         self._last_recovery: dict[str, str | float] | None = None
         self._warmup_ok = False
         self._warmup_error: str | None = None
+
+        # SQLite für persistente Sessions
+        self._db: sqlite3.Connection | None = None
+        self._db_path: str | None = None
+        self._init_session_db()
+
+    # ── Session DB ────────────────────────────────────────────────────────────
+
+    def _init_session_db(self) -> None:
+        """Öffnet die SQLite-Verbindung, erstellt Schema und lädt nicht-expired Sessions."""
+        try:
+            db_path = _resolve_db_path()
+            conn = sqlite3.connect(db_path, check_same_thread=False)
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    model_name TEXT NOT NULL,
+                    last_used_ts REAL NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            self._db = conn
+            self._db_path = db_path
+
+            # Nicht-expired Sessions laden (basierend auf wall-clock TTL)
+            cutoff = time.time() - SESSION_TTL
+            rows = conn.execute(
+                "SELECT session_id, model_name, last_used_ts FROM sessions WHERE last_used_ts > ?",
+                (cutoff,),
+            ).fetchall()
+
+            now_mono = time.monotonic()
+            now_wall = time.time()
+            restored = 0
+            for session_id, model_name, last_used_ts in rows:
+                # Konvertiere wall-clock timestamp in monotonic (annäherungsweise)
+                age_secs = now_wall - last_used_ts
+                mono_ts = now_mono - age_secs
+                self._sessions[session_id] = (model_name, mono_ts)
+                restored += 1
+
+            if restored:
+                logger.info(
+                    "session persistence: restored %d session(s) from %s",
+                    restored,
+                    db_path,
+                )
+            else:
+                logger.debug("session persistence: no sessions to restore from %s", db_path)
+
+            # Abgelaufene Sessions aus DB aufräumen
+            conn.execute(
+                "DELETE FROM sessions WHERE last_used_ts <= ?",
+                (cutoff,),
+            )
+            conn.commit()
+
+        except Exception as exc:
+            logger.warning(
+                "session persistence: DB init failed, running without persistence: %s", exc
+            )
+            self._db = None
+            self._db_path = None
+
+    def _db_upsert_session(self, session_id: str, model_name: str) -> None:
+        """Schreibt oder aktualisiert eine Session in SQLite (best-effort)."""
+        if self._db is None:
+            return
+        try:
+            self._db.execute(
+                """
+                INSERT INTO sessions (session_id, model_name, last_used_ts)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    model_name = excluded.model_name,
+                    last_used_ts = excluded.last_used_ts
+                """,
+                (session_id, model_name, time.time()),
+            )
+            self._db.commit()
+        except Exception as exc:
+            logger.warning("session persistence: upsert failed for %s: %s", session_id, exc)
+
+    def _db_delete_sessions(self, session_ids: list[str]) -> None:
+        """Löscht Sessions aus SQLite (best-effort)."""
+        if self._db is None or not session_ids:
+            return
+        try:
+            placeholders = ",".join("?" * len(session_ids))
+            self._db.execute(
+                f"DELETE FROM sessions WHERE session_id IN ({placeholders})",
+                session_ids,
+            )
+            self._db.commit()
+        except Exception as exc:
+            logger.warning("session persistence: delete failed: %s", exc)
 
     # ── Model Cache ───────────────────────────────────────────────────────────
 
@@ -349,23 +525,36 @@ class ModelManager:
                 if large and SPECULATIVE_DRAFT_MODEL:
                     draft_path = resolve_model_path(SPECULATIVE_DRAFT_MODEL)
                     if draft_path.is_file():
-                        draft_llm = Llama(
-                            model_path=str(draft_path),
-                            n_ctx=N_CTX_SMALL,
-                            n_threads=N_THREADS,
-                            n_threads_batch=N_THREADS_BATCH,
-                            n_batch=N_BATCH_SMALL,
-                            n_ubatch=N_UBATCH_SMALL,
-                            flash_attn=FLASH_ATTN,
-                            use_mmap=MMAP,
-                            use_mlock=False,
-                            verbose=False,
-                        )
-                        draft_model = LlamaModelDraft(draft_llm)
-                        logger.info(
-                            "speculative: draft-target enabled (draft=%s target=%s)",
-                            SPECULATIVE_DRAFT_MODEL, model_name,
-                        )
+                        # Tokenizer-Kompatibilitätscheck anhand des Modellnamens.
+                        # Verschiedene Tokenizer-Familien (Qwen 152K, Gemma 262K, …) verwenden
+                        # nicht-überlappende Token-ID-Räume. Wenn Gemma Token-IDs > 152K an das
+                        # Qwen-Draft-Modell weitergibt, liefert llama_decode -1.
+                        # Nur wenn beide Modelle aus derselben Familie stammen, ist Draft-Target sicher.
+                        if not _same_tokenizer_family(SPECULATIVE_DRAFT_MODEL, model_name):
+                            logger.warning(
+                                "speculative: tokenizer family mismatch (draft=%s, target=%s) — "
+                                "falling back to prompt-lookup to avoid invalid token IDs",
+                                SPECULATIVE_DRAFT_MODEL, model_name,
+                            )
+                            draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
+                        else:
+                            draft_llm = Llama(
+                                model_path=str(draft_path),
+                                n_ctx=N_CTX_SMALL,
+                                n_threads=N_THREADS,
+                                n_threads_batch=N_THREADS_BATCH,
+                                n_batch=N_BATCH_SMALL,
+                                n_ubatch=N_UBATCH_SMALL,
+                                flash_attn=FLASH_ATTN,
+                                use_mmap=MMAP,
+                                use_mlock=False,
+                                verbose=False,
+                            )
+                            draft_model = LlamaModelDraft(draft_llm)
+                            logger.info(
+                                "speculative: draft-target enabled (draft=%s target=%s)",
+                                SPECULATIVE_DRAFT_MODEL, model_name,
+                            )
                     else:
                         draft_model = LlamaPromptLookupDecoding(num_pred_tokens=10, max_ngram_size=2)
                         logger.warning("speculative: draft file not found, using prompt-lookup: %s", model_name)
@@ -429,6 +618,7 @@ class ModelManager:
     async def _touch_session(self, session_id: str, model_name: str) -> None:
         async with self._session_lock:
             self._sessions[session_id] = (model_name, time.monotonic())
+        self._db_upsert_session(session_id, model_name)
 
     async def _invalidate_model_state(self, model_name: str) -> None:
         async with self._lock:
@@ -451,6 +641,7 @@ class ModelManager:
                     len(stale_sessions),
                     model_name,
                 )
+        self._db_delete_sessions(stale_sessions)
         self._recovery_count += 1
         self._last_recovery = {
             "model": model_name,
@@ -645,6 +836,7 @@ class ModelManager:
             if dead:
                 logger.info("evicted %d stale session(s)", len(dead))
 
+        self._db_delete_sessions(dead)
         return stale
 
     @property

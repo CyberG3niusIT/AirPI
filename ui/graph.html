@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AirPI — Memory Graph</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e5e7eb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Top Bar ─────────────────────────────────────────────── */
+    #topbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 44px;
+      background: rgba(15, 17, 23, 0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      z-index: 100;
+      gap: 12px;
+    }
+
+    #back-link {
+      color: #9ca3af;
+      text-decoration: none;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: color 0.15s;
+      white-space: nowrap;
+    }
+    #back-link:hover { color: #a3e635; }
+
+    #stats {
+      font-size: 12px;
+      color: #6b7280;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+    #stats span { color: #9ca3af; font-weight: 500; }
+
+    /* ── Search ──────────────────────────────────────────────── */
+    #search-wrap {
+      flex: 1;
+      max-width: 280px;
+    }
+
+    #graph-search {
+      width: 100%;
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 12px;
+      padding: 5px 10px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #graph-search::placeholder { color: #4b5563; }
+    #graph-search:focus { border-color: #a3e635; }
+
+    #refresh-indicator {
+      font-size: 11px;
+      color: #374151;
+      white-space: nowrap;
+    }
+
+    /* ── Layout: graph + sidebar ─────────────────────────────── */
+    #main-layout {
+      position: fixed;
+      top: 44px;
+      left: 0;
+      right: 0;
+      bottom: 36px;
+      display: flex;
+    }
+
+    #graph-container {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+    }
+
+    svg {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+    svg:active { cursor: grabbing; }
+
+    /* ── Sidebar ─────────────────────────────────────────────── */
+    #sidebar {
+      width: 300px;
+      min-width: 260px;
+      max-width: 340px;
+      background: #111827;
+      border-left: 1px solid #1f2937;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transform: translateX(100%);
+      transition: transform 0.25s ease;
+    }
+    #sidebar.open {
+      transform: translateX(0);
+    }
+
+    #sidebar-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid #1f2937;
+      gap: 8px;
+    }
+
+    #sidebar-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #a3e635;
+      word-break: break-word;
+    }
+
+    #sidebar-close {
+      background: none;
+      border: none;
+      color: #6b7280;
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 4px;
+      transition: color 0.15s;
+      flex-shrink: 0;
+    }
+    #sidebar-close:hover { color: #e5e7eb; }
+
+    #sidebar-meta {
+      padding: 10px 16px;
+      font-size: 12px;
+      color: #6b7280;
+      border-bottom: 1px solid #1f2937;
+      line-height: 1.7;
+    }
+    #sidebar-meta strong { color: #9ca3af; }
+
+    #sidebar-memories {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 0;
+    }
+
+    .memory-item {
+      padding: 8px 16px;
+      border-bottom: 1px solid #1a2130;
+      font-size: 12px;
+      color: #9ca3af;
+      line-height: 1.5;
+    }
+    .memory-item:last-child { border-bottom: none; }
+    .memory-item .mem-id {
+      font-size: 10px;
+      color: #374151;
+      margin-bottom: 2px;
+    }
+
+    #sidebar-loading {
+      padding: 16px;
+      font-size: 12px;
+      color: #4b5563;
+      text-align: center;
+    }
+
+    /* ── Export bar ──────────────────────────────────────────── */
+    #export-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 36px;
+      background: rgba(15, 17, 23, 0.92);
+      border-top: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      z-index: 100;
+    }
+
+    #btn-svg-export {
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 5px;
+      color: #9ca3af;
+      font-size: 11px;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #btn-svg-export:hover {
+      border-color: #a3e635;
+      color: #a3e635;
+    }
+
+    /* ── Links / Nodes ───────────────────────────────────────── */
+    .link {
+      stroke: rgba(156, 163, 175, 0.35);
+      stroke-linecap: round;
+      transition: stroke 0.2s, stroke-opacity 0.2s;
+    }
+    .link.highlighted {
+      stroke: rgba(163, 230, 53, 0.7);
+      stroke-opacity: 1;
+    }
+    .link.dimmed {
+      stroke-opacity: 0.06;
+    }
+
+    .node circle {
+      cursor: pointer;
+      transition: r 0.15s, filter 0.15s, opacity 0.2s;
+    }
+    .node circle:hover {
+      filter: brightness(1.3) drop-shadow(0 0 6px currentColor);
+    }
+    .node.highlighted circle {
+      filter: brightness(1.4) drop-shadow(0 0 8px #a3e635);
+    }
+    .node.dimmed circle {
+      opacity: 0.18;
+    }
+    .node.dimmed text {
+      opacity: 0.12;
+    }
+
+    /* QW-8: search dim/highlight */
+    .node.search-dim circle { opacity: 0.2; }
+    .node.search-dim text   { opacity: 0.2; }
+    .node.search-match circle { opacity: 1.0; }
+    .node.search-match text   { opacity: 1.0; }
+
+    .node text {
+      pointer-events: none;
+      fill: #f9fafb;
+      font-family: inherit;
+      dominant-baseline: middle;
+      text-anchor: middle;
+      user-select: none;
+      transition: opacity 0.2s;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────────── */
+    #tooltip {
+      position: fixed;
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      max-width: 280px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 200;
+      line-height: 1.6;
+    }
+    #tooltip.visible { opacity: 1; }
+    #tooltip strong {
+      color: #a3e635;
+      font-size: 13px;
+      display: block;
+      margin-bottom: 4px;
+    }
+    #tooltip .meta { color: #6b7280; font-size: 11px; margin-top: 6px; }
+
+    /* ── Empty State ─────────────────────────────────────────── */
+    #empty-state {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      display: none;
+    }
+    #empty-state .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.4;
+    }
+    #empty-state p {
+      color: #6b7280;
+      font-size: 15px;
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    /* ── Loading ─────────────────────────────────────────────── */
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #4b5563;
+      font-size: 14px;
+    }
+
+    /* ── Small screens: sidebar below graph ─────────────────── */
+    @media (max-width: 640px) {
+      #main-layout { flex-direction: column; }
+      #sidebar {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        max-height: 45vh;
+        border-left: none;
+        border-top: 1px solid #1f2937;
+        transform: translateY(100%);
+        transition: transform 0.25s ease;
+      }
+      #sidebar.open { transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <a id="back-link" href="/ui/index.html">&#8592; Chat</a>
+  <div id="search-wrap">
+    <input type="text" id="graph-search" placeholder="Konzept suchen&#8230;" autocomplete="off" />
+  </div>
+  <div id="stats">
+    <span id="stat-nodes">0</span> Konzepte &nbsp;|&nbsp;
+    <span id="stat-edges">0</span> Verbindungen &nbsp;|&nbsp;
+    <span id="stat-entries">0</span> Einträge
+  </div>
+  <div id="refresh-indicator">Auto-Refresh in <span id="countdown">60</span>s</div>
+</div>
+
+<div id="main-layout">
+  <div id="graph-container">
+    <div id="loading">Lade Graph&#8230;</div>
+    <div id="empty-state">
+      <div class="icon">&#9678;</div>
+      <p>Noch keine Erinnerungen &#8212; starte einen Chat und AirPI lernt automatisch.</p>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <div id="sidebar-title"></div>
+      <button id="sidebar-close" title="Schlie&#223;en">&#10005;</button>
+    </div>
+    <div id="sidebar-meta"></div>
+    <div id="sidebar-memories">
+      <div id="sidebar-loading">Lade Eintr&#228;ge&#8230;</div>
+    </div>
+  </div>
+</div>
+
+<div id="export-bar">
+  <button id="btn-svg-export">SVG exportieren</button>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const DATA_URL      = "/graph/data";
+const MEMORY_URL    = "/memory";
+const REFRESH_SECS  = 60;
+const NODE_MIN      = 6;
+const NODE_MAX      = 24;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let simulation     = null;
+let svgEl          = null;
+let countdown      = REFRESH_SECS;
+let graphData      = null;
+let allMemories    = {};   // id → entry
+let memoriesLoaded = false;
+let currentSearch  = "";
+let nodeSelection  = null;
+let linkSelection  = null;
+let radiusOf       = null;
+
+// ── Colour by weight ──────────────────────────────────────────────────────────
+function nodeColor(w) {
+  if (w >= 3) return "#a3e635";
+  if (w >= 2) return "#4ade80";
+  return "#86efac";
+}
+
+// ── Radius scale ──────────────────────────────────────────────────────────────
+function makeRadiusScale(nodes) {
+  const weights = nodes.map(n => n.weight);
+  const lo = Math.min(...weights, 1);
+  const hi = Math.max(...weights, 1);
+  return d3.scaleLinear().domain([lo, hi]).range([NODE_MIN, NODE_MAX]).clamp(true);
+}
+
+// ── Load memories for sidebar ─────────────────────────────────────────────────
+async function ensureMemoriesLoaded() {
+  if (memoriesLoaded) return;
+  try {
+    const resp = await fetch(MEMORY_URL);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    allMemories = {};
+    (data.entries || []).forEach(function(e) { allMemories[e.id] = e; });
+    memoriesLoaded = true;
+  } catch (err) {
+    console.warn("Could not load memories for sidebar:", err);
+  }
+}
+
+// ── Load + Render ─────────────────────────────────────────────────────────────
+async function loadGraph() {
+  try {
+    const resp = await fetch(DATA_URL);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    graphData = await resp.json();
+    memoriesLoaded = false;
+    renderGraph(graphData);
+  } catch (err) {
+    console.error("Graph load failed:", err);
+    document.getElementById("loading").textContent = "Fehler beim Laden - " + err.message;
+  }
+}
+
+function renderGraph(data) {
+  const container = document.getElementById("graph-container");
+  document.getElementById("loading").style.display = "none";
+
+  // Remove old SVG if re-rendering
+  const old = container.querySelector("svg");
+  if (old) old.remove();
+  if (simulation) { simulation.stop(); simulation = null; }
+  nodeSelection = null;
+  linkSelection = null;
+
+  const { nodes, edges, meta } = data;
+
+  // Update stats
+  document.getElementById("stat-nodes").textContent   = nodes.length;
+  document.getElementById("stat-edges").textContent   = edges.length;
+  document.getElementById("stat-entries").textContent = meta.total_entries || 0;
+
+  // Empty state
+  if (nodes.length === 0) {
+    document.getElementById("empty-state").style.display = "block";
+    return;
+  }
+  document.getElementById("empty-state").style.display = "none";
+
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+
+  radiusOf = makeRadiusScale(nodes);
+
+  // Build node + link objects (d3 mutates them with x/y/vx/vy)
+  const nodeById = Object.fromEntries(nodes.map(n => [n.id, Object.assign({}, n)]));
+  const linkData = edges
+    .filter(e => nodeById[e.source] && nodeById[e.target])
+    .map(e => ({
+      source: nodeById[e.source],
+      target: nodeById[e.target],
+      weight: e.weight,
+    }));
+  const nodeData = Object.values(nodeById);
+
+  // ── SVG setup ────────────────────────────────────────────────────────────
+  const svg = d3.create("svg")
+    .attr("viewBox", [0, 0, W, H]);
+
+  svgEl = svg.node();
+  container.appendChild(svgEl);
+
+  // Zoom layer
+  const g = svg.append("g");
+
+  svg.call(
+    d3.zoom()
+      .scaleExtent([0.15, 4])
+      .on("zoom", function(event) { g.attr("transform", event.transform); })
+  );
+
+  // ── Links ────────────────────────────────────────────────────────────────
+  const edgeWeights = edges.map(e => e.weight);
+  const wLo = Math.min(...edgeWeights, 1);
+  const wHi = Math.max(...edgeWeights, 1);
+  const strokeWidth = d3.scaleLinear().domain([wLo, wHi]).range([0.8, 3.5]).clamp(true);
+
+  const link = g.append("g")
+    .attr("class", "links")
+    .selectAll("line")
+    .data(linkData)
+    .join("line")
+    .attr("class", "link")
+    .attr("stroke-width", d => strokeWidth(d.weight));
+
+  linkSelection = link;
+
+  // ── Nodes ────────────────────────────────────────────────────────────────
+  const node = g.append("g")
+    .attr("class", "nodes")
+    .selectAll("g")
+    .data(nodeData)
+    .join("g")
+    .attr("class", "node")
+    .call(drag(simulation));
+
+  node.append("circle")
+    .attr("r", d => radiusOf(d.weight))
+    .attr("fill", d => nodeColor(d.weight))
+    .attr("stroke", "#0f1117")
+    .attr("stroke-width", 1.5);
+
+  node.append("text")
+    .attr("dy", d => radiusOf(d.weight) + 11)
+    .attr("font-size", d => Math.round(9 + radiusOf(d.weight) * 0.25) + "px")
+    .text(d => d.id);
+
+  nodeSelection = node;
+
+  // ── Simulation ──────────────────────────────────────────────────────────
+  simulation = d3.forceSimulation(nodeData)
+    .force("link", d3.forceLink(linkData)
+      .id(d => d.id)
+      .distance(d => 80 + (radiusOf(d.source.weight) + radiusOf(d.target.weight)) * 2)
+      .strength(0.4))
+    .force("charge", d3.forceManyBody()
+      .strength(d => -120 - radiusOf(d.weight) * 12))
+    .force("center", d3.forceCenter(W / 2, H / 2).strength(0.08))
+    .force("collision", d3.forceCollide(d => radiusOf(d.weight) + 8))
+    .alphaDecay(0.025)
+    .on("tick", ticked);
+
+  // Re-attach drag with live simulation ref
+  node.call(drag(simulation));
+
+  function ticked() {
+    link
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+  }
+
+  // ── Interaction ──────────────────────────────────────────────────────────
+  const tooltip = document.getElementById("tooltip");
+
+  node
+    .on("mouseover", function(event, d) {
+      const count = d.entries ? d.entries.length : 0;
+      tooltip.innerHTML =
+        "<strong>" + escHtml(d.id) + "</strong>" +
+        "Erscheint in <b>" + count + "</b> Eintr&auml;gen<br>" +
+        "Verbindungen: <b>" + d.weight + "</b>" +
+        "<div class=\"meta\">Klick &rarr; Details &amp; Backlinks</div>";
+      tooltip.classList.add("visible");
+    })
+    .on("mousemove", function(event) {
+      const tx = Math.min(event.clientX + 14, window.innerWidth - 300);
+      const ty = Math.min(event.clientY - 10, window.innerHeight - 120);
+      tooltip.style.left = tx + "px";
+      tooltip.style.top  = ty + "px";
+    })
+    .on("mouseout", function() {
+      tooltip.classList.remove("visible");
+    })
+    .on("click", function(event, d) {
+      event.stopPropagation();
+      tooltip.classList.remove("visible");
+      highlightNeighbors(d);
+      openSidebar(d);
+    });
+
+  svg.on("click", function() {
+    clearHighlight();
+    closeSidebar();
+  });
+
+  // Apply current search state to newly rendered graph
+  if (currentSearch) applySearch(currentSearch);
+
+  function highlightNeighbors(d) {
+    const connected = new Set([d.id]);
+    linkData.forEach(function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      if (sid === d.id) connected.add(tid);
+      if (tid === d.id) connected.add(sid);
+    });
+
+    node.classed("highlighted", n => n.id === d.id);
+    node.classed("dimmed",      n => !connected.has(n.id));
+    link.classed("highlighted", function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      return sid === d.id || tid === d.id;
+    });
+    link.classed("dimmed", function(l) {
+      const sid = typeof l.source === "object" ? l.source.id : l.source;
+      const tid = typeof l.target === "object" ? l.target.id : l.target;
+      return !connected.has(sid) || !connected.has(tid);
+    });
+  }
+
+  function clearHighlight() {
+    node.classed("highlighted", false).classed("dimmed", false);
+    link.classed("highlighted", false).classed("dimmed", false);
+  }
+}
+
+// ── Search (QW-8) ─────────────────────────────────────────────────────────────
+function applySearch(term) {
+  if (!nodeSelection || !radiusOf) return;
+  const q = term.trim().toLowerCase();
+  if (!q) {
+    nodeSelection.classed("search-dim", false).classed("search-match", false);
+    nodeSelection.select("circle").attr("r", d => radiusOf(d.weight));
+    return;
+  }
+  nodeSelection.each(function(d) {
+    const matches = d.id.toLowerCase().indexOf(q) !== -1;
+    d3.select(this)
+      .classed("search-match", matches)
+      .classed("search-dim", !matches);
+  });
+  nodeSelection.select("circle").attr("r", function(d) {
+    const matches = d.id.toLowerCase().indexOf(q) !== -1;
+    return matches ? radiusOf(d.weight) * 1.3 : radiusOf(d.weight);
+  });
+}
+
+document.getElementById("graph-search").addEventListener("input", function() {
+  currentSearch = this.value;
+  applySearch(currentSearch);
+});
+
+// ── Sidebar / Backlinks (QW-8) ────────────────────────────────────────────────
+async function openSidebar(d) {
+  const sidebar = document.getElementById("sidebar");
+  document.getElementById("sidebar-title").textContent = d.id;
+
+  const ageDays    = d.age_days    != null ? d.age_days    : "?";
+  const confidence = d.confidence  != null ? d.confidence  : 80;
+  const category   = d.category   || "fact";
+  const source     = d.source     || "unknown";
+
+  document.getElementById("sidebar-meta").innerHTML =
+    "<strong>Kategorie:</strong> " + escHtml(category) + "<br>" +
+    "<strong>Quelle:</strong> "    + escHtml(source)   + "<br>" +
+    "<strong>Confidence:</strong> " + confidence       + "%<br>" +
+    "<strong>Alter:</strong> "     + ageDays           + " Tage";
+
+  const memoriesEl = document.getElementById("sidebar-memories");
+  memoriesEl.innerHTML = "<div id=\"sidebar-loading\">Lade Einträge…</div>";
+
+  sidebar.classList.add("open");
+
+  await ensureMemoriesLoaded();
+
+  memoriesEl.innerHTML = "";
+
+  const ids = d.memory_ids || [];
+  if (ids.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "memory-item";
+    empty.textContent = "Keine verknüpften Einträge gefunden.";
+    memoriesEl.appendChild(empty);
+    return;
+  }
+
+  ids.forEach(function(id) {
+    const entry = allMemories[id];
+    const item = document.createElement("div");
+    item.className = "memory-item";
+
+    const idDiv = document.createElement("div");
+    idDiv.className = "mem-id";
+    idDiv.textContent = "#" + id;
+    item.appendChild(idDiv);
+
+    const textDiv = document.createElement("div");
+    textDiv.textContent = entry ? entry.content : "(Eintrag nicht gefunden)";
+    item.appendChild(textDiv);
+
+    memoriesEl.appendChild(item);
+  });
+}
+
+function closeSidebar() {
+  document.getElementById("sidebar").classList.remove("open");
+}
+
+document.getElementById("sidebar-close").addEventListener("click", closeSidebar);
+
+// ── SVG Export (QW-8) ─────────────────────────────────────────────────────────
+document.getElementById("btn-svg-export").addEventListener("click", function() {
+  if (!svgEl) return;
+  const serializer = new XMLSerializer();
+  let svgStr = serializer.serializeToString(svgEl);
+  if (svgStr.indexOf("<?xml") !== 0) {
+    svgStr = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + svgStr;
+  }
+  const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  const ts   = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  a.href     = url;
+  a.download = "airpi-graph-" + ts + ".svg";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+// ── Drag helper ───────────────────────────────────────────────────────────────
+function drag(sim) {
+  function started(event, d) {
+    if (!event.active && sim) sim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+  function ended(event, d) {
+    if (!event.active && sim) sim.alphaTarget(0);
+    d.fx = null; d.fy = null;
+  }
+  return d3.drag().on("start", started).on("drag", dragged).on("end", ended);
+}
+
+// ── HTML escape helper ────────────────────────────────────────────────────────
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// ── Auto-Refresh Countdown ────────────────────────────────────────────────────
+function startCountdown() {
+  countdown = REFRESH_SECS;
+  const el = document.getElementById("countdown");
+
+  const iv = setInterval(function() {
+    countdown -= 1;
+    el.textContent = countdown;
+    if (countdown <= 0) {
+      clearInterval(iv);
+      loadGraph().then(function() { startCountdown(); });
+    }
+  }, 1000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+loadGraph().then(function() { startCountdown(); });
+</script>
+</body>
+</html>
