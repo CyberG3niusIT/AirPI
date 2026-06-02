@@ -1,4 +1,4 @@
-# AirPI v2 — Stateful LLM Inference Server for Raspberry Pi 5
+# AirPI v2: Stateful LLM Inference Server for Raspberry Pi 5
 
 > Ollama-compatible inference server with persistent memory, knowledge graph, web UI, and CLI for a Raspberry Pi 5 with 8 GB RAM and NVMe storage.
 
@@ -20,7 +20,7 @@ AirPI v2 adds **stateful inference** to the Pi 5:
 | **Knowledge Graph** | Visual concept relationships extracted from conversations |
 | **Web UI** | Markdown-rendering chat, system prompt editor, export, real-time stats |
 | **CLI** | Full-featured command-line interface with multiline input and editor support |
-| **Session Cache** | KV-cache reuse within and across requests (70–90% prefill savings) |
+| **Session Cache** | KV-cache reuse within and across requests (70-90% prefill savings) |
 | **Speculative Decoding** | Optional draft-target acceleration |
 
 ### v2 vs v1
@@ -112,27 +112,27 @@ sudo systemctl status airpi
 ### 💬 Web Chat Interface
 
 - **Markdown rendering** with syntax-highlighted code blocks (copy button on hover)
-- **System prompt editor** — change model behavior per session (persisted in localStorage)
-- **Chat export** — download conversation as `.md` or `.json`
-- **Live stats bar** — model name, queue depth, cache hit rate, tokens/sec
-- **No external CDN** — all libraries vendor'd locally
+- **System prompt editor**: change model behavior per session (persisted in localStorage)
+- **Chat export**: download conversation as `.md` or `.json`
+- **Live stats bar**: model name, queue depth, cache hit rate, tokens/sec
+- **No external CDN**: all libraries vendor'd locally
 
 ### 🧠 Persistent Memory
 
 - **Automatic extraction** from chat responses
 - **Deduplication** on content hash
-- **Categorization** — fact, preference, correction, project, system, todo
-- **Confidence scoring** (0–100, learned from recency and context)
-- **Top-50 limiting** — memory.md stays handleable even after hundreds of facts
-- **Fallback strategies** — graceful handling of malformed LLM extraction
+- **Categorization**: fact, preference, correction, project, system, todo
+- **Confidence scoring** (0-100, learned from recency and context)
+- **Top-50 limiting**: memory.md stays handleable even after hundreds of facts
+- **Fallback strategies**: graceful handling of malformed LLM extraction
 
 ### 📊 Knowledge Graph
 
-- **Concept nodes** — extracted entities with category, source, age, confidence
-- **Edges** — co-occurrence relationships between concepts
-- **Interactive search** — filter and dim unmatched nodes
-- **Backlinks panel** — click any node to see which facts reference it
-- **SVG export** — save the graph for documentation
+- **Concept nodes**: extracted entities with category, source, age, confidence
+- **Edges**: co-occurrence relationships between concepts
+- **Interactive search**: filter and dim unmatched nodes
+- **Backlinks panel**: click any node to see which facts reference it
+- **SVG export**: save the graph for documentation
 - **Live updates** ready (groundwork in Phase 3)
 
 ### ⌨️ CLI
@@ -168,10 +168,10 @@ prompt> .edit
 ```
 
 **Exit codes:**
-- `0` — success
-- `1` — server error
-- `2` — timeout
-- `3` — model error
+- `0`: success
+- `1`: server error
+- `2`: timeout
+- `3`: model error
 
 ### 🔄 Session-Based KV-Cache
 
@@ -261,18 +261,18 @@ See `.env.example` for all options.
 ### Benchmarks (Qwen2.5-Coder family)
 
 | Model | Size | RAM | tok/sec | First-token |
-|-------|------|-----|---------|------------|
-| 0.5B | Q4_K_M | 0.4 GB | 25–30 | 80 ms |
-| 1.5B | Q4_K_M | 1.2 GB | 12–15 | 120 ms |
-| 7B | Q4_K_M | 4.1 GB | 3–5 | 250 ms |
-| 14B | Q4_K_M | 8.1 GB | 1–2* | 500 ms |
+|-------|------|-----|---------|-------------|
+| 0.5B | Q4_K_M | 0.4 GB | 25-30 | 80 ms |
+| 1.5B | Q4_K_M | 1.2 GB | 12-15 | 120 ms |
+| 7B | Q4_K_M | 4.1 GB | 3-5 | 250 ms |
+| 14B | Q4_K_M | 8.1 GB | 1-2* | 500 ms |
 
 \* With mmap paging to NVMe; full RAM resident is faster but requires larger device.
 
 ### Cache Hit Impact
 
 - **Cache miss** (first request in session): full prefill overhead
-- **Cache hit** (subsequent requests): 70–90% reduction in prefill tokens
+- **Cache hit** (subsequent requests): 70-90% reduction in prefill tokens
 - Example: 2000-token prompt, cache hit saves ~1600 decode iterations
 
 ---
@@ -411,27 +411,27 @@ MIT License. See [LICENSE](./LICENSE) for details.
 
 ---
 
-## Roadmap (Phase 3 — Whimsy Features)
+## Roadmap (Phase 3: Whimsy Features)
 
 Planned for v2.1:
 
-- **Ambient Mode** — Home Assistant webhooks trigger quick summaries
-- **Dream Mode** — Nightly reflection & deduplication
-- **Memory Decay** — Older concepts fade visually in the graph
-- **Persona System** — Vordefined prompt presets (coder, teacher, coach, etc.)
-- **Voice Interface** — Push-to-talk web UI + TTS
-- **Hybrid Router** — Route to external APIs (Claude, OpenAI) when needed
-- **Live Synapse Formation** — Graph updates in real-time during chat
-- **Model Sparring** — Compare responses across models side-by-side
+- **Ambient Mode**: Home Assistant webhooks trigger quick summaries
+- **Dream Mode**: Nightly reflection & deduplication
+- **Memory Decay**: Older concepts fade visually in the graph
+- **Persona System**: Vordefined prompt presets (coder, teacher, coach, etc.)
+- **Voice Interface**: Push-to-talk web UI + TTS
+- **Hybrid Router**: Route to external APIs (Claude, OpenAI) when needed
+- **Live Synapse Formation**: Graph updates in real-time during chat
+- **Model Sparring**: Compare responses across models side-by-side
 
 ---
 
 ## Status
 
-- **Phase 1 ✅** — Backend contract, memory schema, graph foundation (93 tests)
-- **Phase 2 ✅** — Chat UI, Memory v1.5, Graph UI, CLI (99 tests)
-- **Phase 3 🚧** — Whimsy features (in planning)
-- **Phase 4 📋** — Performance gates & optimization
+- **Phase 1 ✅**: Backend contract, memory schema, graph foundation (93 tests)
+- **Phase 2 ✅**: Chat UI, Memory v1.5, Graph UI, CLI (99 tests)
+- **Phase 3 🚧**: Whimsy features (in planning)
+- **Phase 4 📋**: Performance gates & optimization
 
 ---
 
@@ -439,4 +439,4 @@ Planned for v2.1:
 
 Questions? Open an issue on GitHub or reach out to the maintainers.
 
-**AirPI** — Intelligent inference on the edge. 🚀
+**AirPI**: Intelligent inference on the edge. 🚀
