@@ -42,10 +42,20 @@ git clone https://github.com/CyberG3niusIT/AirPI.git
 cd AirPI
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 ```
 
-### 2. Download Models
+### 2. Build & Install
+
+```bash
+# Build llama-cpp-python for ARM64 (required)
+CMAKE_ARGS="-DLLAMA_NATIVE=on -DLLAMA_BLAS=OFF" \
+  pip install llama-cpp-python --no-binary llama-cpp-python
+
+# Install AirPI + dependencies (enables CLI)
+pip install -e .
+```
+
+### 3. Download Models
 
 Create the default model directory and download a GGUF model:
 
@@ -65,7 +75,7 @@ huggingface-cli download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
   --local-dir /data/models
 ```
 
-### 3. Run
+### 4. Run
 
 #### Local Development
 
@@ -82,7 +92,7 @@ sudo systemctl enable --now airpi
 sudo systemctl status airpi
 ```
 
-### 4. Access AirPI
+### 5. Access AirPI
 
 - **Web UI**: http://localhost:11435/ui/
 - **Graph Visualizer**: http://localhost:11435/ui/graph.html
