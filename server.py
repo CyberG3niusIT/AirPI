@@ -34,12 +34,19 @@ import config
 from model_manager import build_json_grammar, manager, select_model_for_prompt
 from memory.manager import get_memory_manager
 from memory.graph import GraphBuilder, merge_graph_overlays
+from core.policy import PolicyEngine, Action
+from core.router import ModelRouter, BackendType
+from core.audit import AuditLogger, AuditRecord
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s – %(message)s",
 )
 logger = logging.getLogger("airpi")
+
+_policy_engine = PolicyEngine()
+_model_router = ModelRouter(default_local_model=config.DEFAULT_MODEL)
+_audit_logger = AuditLogger(logger=logger)
 
 _queue_depth: int = 0
 
@@ -433,6 +440,35 @@ async def generate(request: GenerateRequest, http_request: Request) -> Streaming
             False,
             request_id,
         ) from exc
+
+    # 1. Policy check
+    policy_decision = _policy_engine.evaluate({"prompt": request.prompt, "model": model_name})
+
+    # 2. Routing
+    route = _model_router.route(policy_decision, {"model": model_name})
+
+    # 3. Audit
+    _audit_logger.log(AuditRecord(
+        request_type="generate",
+        policy_decision=policy_decision.action.value,
+        backend_selected=route.backend.value,
+        reason=route.reason,
+        metadata={"prompt_length": len(request.prompt), "request_id": request_id}
+    ))
+
+    if route.blocked:
+        metrics.record_error()
+        raise _http_error(
+            403,
+            ErrorCode.INVALID_REQUEST,
+            f"Request blocked by policy: {route.reason}",
+            False,
+            request_id,
+        )
+
+    # In Phase 2, we only support LOCAL backend execution.
+    # We update the model_name to whatever the router decided, if applicable.
+    model_name = route.model_name or model_name
 
     _queue_depth += 1
     start_ns = time.perf_counter_ns()
@@ -1026,6 +1062,33 @@ async def api_chat(request: ChatRequest, http_request: Request) -> StreamingResp
                           False, request_id) from exc
 
     prompt = _build_chat_prompt(request)
+
+    # 1. Policy check
+    policy_decision = _policy_engine.evaluate({"prompt": prompt, "model": model_name})
+
+    # 2. Routing
+    route = _model_router.route(policy_decision, {"model": model_name})
+
+    # 3. Audit
+    _audit_logger.log(AuditRecord(
+        request_type="chat",
+        policy_decision=policy_decision.action.value,
+        backend_selected=route.backend.value,
+        reason=route.reason,
+        metadata={"messages_count": len(request.messages), "request_id": request_id}
+    ))
+
+    if route.blocked:
+        metrics.record_error()
+        raise _http_error(
+            403,
+            ErrorCode.INVALID_REQUEST,
+            f"Request blocked by policy: {route.reason}",
+            False,
+            request_id,
+        )
+
+    model_name = route.model_name or model_name
 
     # Streaming: UI sendet stream=true — gibt NDJSON-Chunks zurück
     if request.stream:
