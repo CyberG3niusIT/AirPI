@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,12 +35,19 @@ import config
 from model_manager import build_json_grammar, manager, select_model_for_prompt
 from memory.manager import get_memory_manager
 from memory.graph import GraphBuilder, merge_graph_overlays
+from core.policy import PolicyEngine, Action
+from core.router import ModelRouter, BackendType
+from core.audit import AuditLogger, AuditRecord
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s – %(message)s",
 )
 logger = logging.getLogger("airpi")
+
+_policy_engine = PolicyEngine()
+_model_router = ModelRouter(default_local_model=config.DEFAULT_MODEL)
+_audit_logger = AuditLogger(logger=logger)
 
 _queue_depth: int = 0
 
@@ -189,6 +197,18 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+security = HTTPBearer(auto_error=False)
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> None:
+    if not config.API_KEY:
+        return
+    if not credentials or credentials.credentials != config.API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 _UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
 if os.path.isdir(_UI_DIR):
@@ -387,7 +407,7 @@ async def prometheus_metrics() -> PlainTextResponse:
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
-@app.get("/api/tags")
+@app.get("/api/tags", dependencies=[Depends(verify_api_key)])
 async def list_models() -> dict:
     models = []
     if os.path.isdir(config.MODELS_DIR):
@@ -406,7 +426,7 @@ async def list_models() -> dict:
     return {"models": models}
 
 
-@app.post("/api/generate", response_model=None)
+@app.post("/api/generate", response_model=None, dependencies=[Depends(verify_api_key)])
 async def generate(request: GenerateRequest, http_request: Request) -> StreamingResponse | GenerateResponse:
     global _queue_depth
     request_id = http_request.headers.get("x-request-id", str(uuid.uuid4()))
@@ -433,6 +453,35 @@ async def generate(request: GenerateRequest, http_request: Request) -> Streaming
             False,
             request_id,
         ) from exc
+
+    # 1. Policy check
+    policy_decision = _policy_engine.evaluate({"prompt": request.prompt, "model": model_name})
+
+    # 2. Routing
+    route = _model_router.route(policy_decision, {"model": model_name})
+
+    # 3. Audit
+    _audit_logger.log(AuditRecord(
+        request_type="generate",
+        policy_decision=policy_decision.action.value,
+        backend_selected=route.backend.value,
+        reason=route.reason,
+        metadata={"prompt_length": len(request.prompt), "request_id": request_id}
+    ))
+
+    if route.blocked:
+        metrics.record_error()
+        raise _http_error(
+            403,
+            ErrorCode.INVALID_REQUEST,
+            f"Request blocked by policy: {route.reason}",
+            False,
+            request_id,
+        )
+
+    # In Phase 2, we only support LOCAL backend execution.
+    # We update the model_name to whatever the router decided, if applicable.
+    model_name = route.model_name or model_name
 
     _queue_depth += 1
     start_ns = time.perf_counter_ns()
@@ -636,7 +685,7 @@ class MemoryDeleteRequest(BaseModel):
     keyword: str = Field(min_length=1)
 
 
-@app.post("/memory/store")
+@app.post("/memory/store", dependencies=[Depends(verify_api_key)])
 async def memory_store(request: MemoryStoreRequest) -> dict:
     """Speichert einen Fakt manuell."""
     try:
@@ -648,7 +697,7 @@ async def memory_store(request: MemoryStoreRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/memory/delete")
+@app.post("/memory/delete", dependencies=[Depends(verify_api_key)])
 async def memory_delete(request: MemoryDeleteRequest) -> dict:
     """Markiert alle Eintraege mit keyword als inaktiv."""
     try:
@@ -661,7 +710,7 @@ async def memory_delete(request: MemoryDeleteRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/memory")
+@app.get("/memory", dependencies=[Depends(verify_api_key)])
 async def memory_get() -> dict:
     """Gibt den aktuellen Memory-Inhalt zurueck."""
     try:
@@ -748,7 +797,7 @@ async def graph_redirect() -> RedirectResponse:
     return RedirectResponse(url="/ui/graph.html", status_code=307)
 
 
-@app.get("/graph/data")
+@app.get("/graph/data", dependencies=[Depends(verify_api_key)])
 async def graph_data() -> dict:
     global _graph_cache
     try:
@@ -779,7 +828,7 @@ async def graph_data() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/graph/manual-edges")
+@app.get("/graph/manual-edges", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edges() -> dict:
     try:
         return {"edges": get_memory_manager().list_manual_edges()}
@@ -788,7 +837,7 @@ async def graph_manual_edges() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/manual-edges")
+@app.post("/graph/manual-edges", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_create(request: GraphManualEdgeCreateRequest) -> dict:
     try:
         edge = get_memory_manager().add_manual_edge(**request.model_dump())
@@ -802,7 +851,7 @@ async def graph_manual_edge_create(request: GraphManualEdgeCreateRequest) -> dic
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.patch("/graph/manual-edges/{edge_id}")
+@app.patch("/graph/manual-edges/{edge_id}", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_update(edge_id: int, request: GraphManualEdgeUpdateRequest) -> dict:
     try:
         edge = get_memory_manager().update_manual_edge(
@@ -819,7 +868,7 @@ async def graph_manual_edge_update(edge_id: int, request: GraphManualEdgeUpdateR
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/manual-edges/{edge_id}")
+@app.delete("/graph/manual-edges/{edge_id}", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_delete(edge_id: int) -> dict:
     try:
         deleted = get_memory_manager().delete_manual_edge(edge_id)
@@ -833,7 +882,7 @@ async def graph_manual_edge_delete(edge_id: int) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/auto-edges/hide")
+@app.post("/graph/auto-edges/hide", dependencies=[Depends(verify_api_key)])
 async def graph_auto_edge_hide(request: GraphAutoEdgeHideRequest) -> dict:
     try:
         override = get_memory_manager().hide_auto_edge(request.edge_key, request.note)
@@ -847,7 +896,7 @@ async def graph_auto_edge_hide(request: GraphAutoEdgeHideRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/graph/nodes")
+@app.get("/graph/nodes", dependencies=[Depends(verify_api_key)])
 async def graph_nodes_list() -> dict:
     """Listet alle manuellen Graph-Knoten."""
     try:
@@ -857,7 +906,7 @@ async def graph_nodes_list() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/nodes")
+@app.post("/graph/nodes", dependencies=[Depends(verify_api_key)])
 async def graph_node_create(request: GraphManualNodeCreateRequest) -> dict:
     """Erstellt einen manuellen Graph-Knoten."""
     try:
@@ -872,7 +921,7 @@ async def graph_node_create(request: GraphManualNodeCreateRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.patch("/graph/nodes/{node_id}")
+@app.patch("/graph/nodes/{node_id}", dependencies=[Depends(verify_api_key)])
 async def graph_node_update(node_id: int, request: GraphManualNodeUpdateRequest) -> dict:
     """Aktualisiert einen manuellen Graph-Knoten."""
     try:
@@ -890,7 +939,7 @@ async def graph_node_update(node_id: int, request: GraphManualNodeUpdateRequest)
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/nodes/{node_id}")
+@app.delete("/graph/nodes/{node_id}", dependencies=[Depends(verify_api_key)])
 async def graph_node_delete(node_id: int) -> dict:
     """Soft-löscht einen manuellen Graph-Knoten."""
     try:
@@ -905,7 +954,7 @@ async def graph_node_delete(node_id: int) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/auto-edges/override")
+@app.delete("/graph/auto-edges/override", dependencies=[Depends(verify_api_key)])
 async def graph_auto_edge_override_clear(request: GraphEdgeOverrideClearRequest) -> dict:
     try:
         cleared = get_memory_manager().clear_edge_override(request.edge_key, request.action)
@@ -1007,7 +1056,7 @@ async def _stream_chat(
         _queue_depth -= 1
 
 
-@app.post("/api/chat", response_model=None)
+@app.post("/api/chat", response_model=None, dependencies=[Depends(verify_api_key)])
 async def api_chat(request: ChatRequest, http_request: Request) -> StreamingResponse | dict:
     global _queue_depth
     request_id = http_request.headers.get("x-request-id", str(uuid.uuid4()))
@@ -1026,6 +1075,33 @@ async def api_chat(request: ChatRequest, http_request: Request) -> StreamingResp
                           False, request_id) from exc
 
     prompt = _build_chat_prompt(request)
+
+    # 1. Policy check
+    policy_decision = _policy_engine.evaluate({"prompt": prompt, "model": model_name})
+
+    # 2. Routing
+    route = _model_router.route(policy_decision, {"model": model_name})
+
+    # 3. Audit
+    _audit_logger.log(AuditRecord(
+        request_type="chat",
+        policy_decision=policy_decision.action.value,
+        backend_selected=route.backend.value,
+        reason=route.reason,
+        metadata={"messages_count": len(request.messages), "request_id": request_id}
+    ))
+
+    if route.blocked:
+        metrics.record_error()
+        raise _http_error(
+            403,
+            ErrorCode.INVALID_REQUEST,
+            f"Request blocked by policy: {route.reason}",
+            False,
+            request_id,
+        )
+
+    model_name = route.model_name or model_name
 
     # Streaming: UI sendet stream=true — gibt NDJSON-Chunks zurück
     if request.stream:

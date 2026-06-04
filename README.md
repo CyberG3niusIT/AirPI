@@ -1,6 +1,6 @@
-# AirPI v2 — Stateful LLM Inference Server for Raspberry Pi 5
+# AirPI: Local AI Control Plane
 
-> Ollama-compatible inference server with persistent memory, knowledge graph, web UI, and CLI for a Raspberry Pi 5 with 8 GB RAM and NVMe storage.
+> Local AI Control Plane for private and small-scale infrastructure. Ollama-compatible edge inference server with policy enforcement, memory control, and audit logging for Raspberry Pi 5 and similar devices.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![llama.cpp](https://img.shields.io/badge/llama.cpp-backed-444444)](https://github.com/ggerganov/llama.cpp)
@@ -10,30 +10,20 @@
 
 ---
 
-## What's New in v2
+## Overview
 
-AirPI v2 adds **stateful inference** to the Pi 5:
+AirPI is an infrastructural component that securely accepts, evaluates, locally processes, and logs AI requests. It provides a structured boundary between your local network services and AI inference models. It is designed to ensure that AI operates in a transparent, auditable, and locally-controlled manner.
+
+### Core Capabilities
 
 | Component | Capability |
 |-----------|-----------|
-| **Memory System** | Persistent fact storage with deduplication and categorization |
-| **Knowledge Graph** | Visual concept relationships extracted from conversations |
-| **Web UI** | Markdown-rendering chat, system prompt editor, export, real-time stats |
-| **CLI** | Full-featured command-line interface with multiline input and editor support |
-| **Session Cache** | KV-cache reuse within and across requests (70–90% prefill savings) |
-| **Speculative Decoding** | Optional draft-target acceleration |
-
-### v2 vs v1
-
-| Feature | v1 | v2 |
-|---------|----|----|
-| API server | ✅ | ✅ |
-| Ollama compatibility | ✅ | ✅ |
-| Session KV-cache | ✅ | ✅ |
-| Web UI | ❌ | ✅ Chat + Graph |
-| Memory persistence | ❌ | ✅ Searchable facts |
-| CLI | ❌ | ✅ Full interactive |
-| System prompt editor | ❌ | ✅ Persistent |
+| **Local Inference** | Secure, on-premise execution using llama.cpp and KV-cache reuse |
+| **Policy and Routing** | Evaluates requests and enforces processing boundaries |
+| **Memory Control** | Verifiable and strictly controllable fact storage with deduplication |
+| **Audit Logging** | Transparent records of model routing and processing |
+| **API and Integrations** | Ollama-compatible API for Home Assistant and PI Guardian |
+| **Management Interfaces** | Web-UI and CLI tailored for infrastructure diagnostics and control |
 
 ---
 
@@ -41,18 +31,17 @@ AirPI v2 adds **stateful inference** to the Pi 5:
 
 ### Prerequisites
 
-- Raspberry Pi 5 with 8 GB RAM and NVMe SSD
+- Raspberry Pi 5 with 8 GB RAM and NVMe SSD (or equivalent hardware)
 - Python 3.11+
-- systemd (for service mode)
+- systemd (for service operation)
 
-### 1. Clone & Setup Environment
+### 1. Clone and Setup Environment
 
 ```bash
-git clone https://github.com/yourusername/AirPI.git
+git clone https://github.com/CyberG3niusIT/AirPI.git
 cd AirPI
-
-python3 -m venv .venv
-source .venv/bin/activate
+python -m venv venv
+source venv/bin/activate
 ```
 
 ### 2. Build & Install
@@ -62,21 +51,25 @@ source .venv/bin/activate
 CMAKE_ARGS="-DLLAMA_NATIVE=on -DLLAMA_BLAS=OFF" \
   pip install llama-cpp-python --no-binary llama-cpp-python
 
-# Install AirPI + dependencies
+# Install AirPI + dependencies (enables CLI)
 pip install -e .
 ```
 
 ### 3. Download Models
 
-```bash
-# Create models directory
-sudo mkdir -p /data/models && sudo chown $USER /data/models
+Create the default model directory and download a GGUF model:
 
-# Download Qwen2.5-Coder (recommended for Pi 5)
+```bash
+sudo mkdir -p /data/models
+sudo chown $USER:$USER /data/models
+
+# Example: Qwen2.5-Coder 1.5B (Fast, low-latency lane)
+pip install huggingface_hub
 huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF \
   qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
   --local-dir /data/models
 
+# Example: Qwen2.5-Coder 7B (For complex tasks)
 huggingface-cli download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
   qwen2.5-coder-7b-instruct-q4_k_m.gguf \
   --local-dir /data/models
@@ -109,85 +102,62 @@ sudo systemctl status airpi
 
 ## Features
 
-### 💬 Web Chat Interface
+### Management UI
 
-- **Markdown rendering** with syntax-highlighted code blocks (copy button on hover)
-- **System prompt editor** — change model behavior per session (persisted in localStorage)
-- **Chat export** — download conversation as `.md` or `.json`
-- **Live stats bar** — model name, queue depth, cache hit rate, tokens/sec
-- **No external CDN** — all libraries vendor'd locally
+- **Diagnostic Interface:** Review system behavior, model responses, and adjust system prompts.
+- **Local Analytics:** Live statistics displaying current model load, queue depth, cache hit rate, and inference speed.
+- **Dependency-free:** All resources are served locally to ensure offline capability.
 
-### 🧠 Persistent Memory
+### Memory Control
 
-- **Automatic extraction** from chat responses
-- **Deduplication** on content hash
-- **Categorization** — fact, preference, correction, project, system, todo
-- **Confidence scoring** (0–100, learned from recency and context)
-- **Top-50 limiting** — memory.md stays handleable even after hundreds of facts
-- **Fallback strategies** — graceful handling of malformed LLM extraction
+- **Rule-based Extraction:** Structured capture of configuration and facts.
+- **Categorization:** Classifies entities as fact, preference, correction, project, system, or todo.
+- **Bounded Storage:** Enforces strict limits on memory entries to maintain performance and control.
+- **Auditable Deletion:** Full capability to wipe stored facts based on keywords or categories.
 
-### 📊 Knowledge Graph
+### Knowledge Graph and Audit
 
-- **Concept nodes** — extracted entities with category, source, age, confidence
-- **Edges** — co-occurrence relationships between concepts
-- **Interactive search** — filter and dim unmatched nodes
-- **Backlinks panel** — click any node to see which facts reference it
-- **SVG export** — save the graph for documentation
-- **Live updates** ready (groundwork in Phase 3)
+- **Concept Auditing:** Visual mapping of extracted entities, showing source, age, and relationship.
+- **Transparency:** Backlinks panel enables administrators to verify the origin of learned facts.
+- **Exportable Records:** Graph exports support documentation of system knowledge.
 
-### ⌨️ CLI
+### Command Line Interface
 
-Full interactive command-line interface:
+Full administrative command-line interface for headless management:
 
 ```bash
-# Start interactive chat
+# Start interactive management session
 airpi chat
 
-# Send system prompt
-airpi chat --system "Du bist ein Python-Experte"
+# Apply a specific system policy
+airpi chat --system "Enforce strict coding standard compliance"
 
-# Load from file
-airpi chat --system-file /path/to/prompt.txt
-
-# Machine-readable output
+# Machine-readable output for scripts
 airpi chat --json
 
-# Watch status with live polling
+# Monitor system health
 airpi status --watch
-
-# Plain text for pipes
 airpi status --plain
 
-# Multiline input with backslash continuation
+# Multiline input support
 prompt> explain\
 ... tensorflow \
 ... architecture
-
-# Open $EDITOR for long input
-prompt> .edit
 ```
 
-**Exit codes:**
-- `0` — success
-- `1` — server error
-- `2` — timeout
-- `3` — model error
+### Session-Based KV-Cache
 
-### 🔄 Session-Based KV-Cache
-
-Pass `session_id` to reuse KV-cache across requests:
+Pass `session_id` to reuse KV-cache across requests, reducing redundant processing:
 
 ```bash
 curl -X POST http://localhost:11435/api/generate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
-    "prompt": "Continue the story: Once upon a time...",
-    "session_id": "story-session-001"
+    "prompt": "Continue the analysis...",
+    "session_id": "audit-session-001"
   }'
 ```
-
-Cache hit rate appears in `/health` and stats bar.
 
 ---
 
@@ -198,36 +168,18 @@ Cache hit rate appears in `/health` and stats bar.
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/live` | GET | Liveness check |
-| `/ready` | GET | Readiness (models + queue) |
-| `/health` | GET | Runtime state, uptime, cache stats, recovery info |
-| `/metrics` | GET | Prometheus format metrics |
-| `/api/tags` | GET | Ollama-compatible model list |
+| `/ready` | GET | Readiness status (models and queue) |
+| `/health` | GET | Runtime state, cache statistics, and resource info |
+| `/metrics` | GET | Prometheus format metrics for monitoring |
+| `/api/tags` | GET | Ollama-compatible model listing |
 | `/api/generate` | POST | Ollama-compatible inference (streaming) |
-| `/api/chat` | POST | Non-streaming chat with system prompt support |
-| `/memory/store` | POST | Manually store a fact |
-| `/memory/delete` | POST | Delete facts by keyword |
-| `/memory` | GET | Retrieve current memory + all active entries |
-| `/graph/data` | GET | Knowledge graph nodes and edges |
-| `/graph` | GET | Redirect to web graph UI |
-| `/ui/` | GET | Serve web UI (index.html) |
-| `/ui/graph.html` | GET | Serve graph visualizer |
-
-### Chat Request Example
-
-```bash
-curl -X POST http://localhost:11435/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "",
-    "messages": [
-      {"role": "system", "content": "Du bist ein hilfreicher Assistent."},
-      {"role": "user", "content": "Erkläre mir rekursion."}
-    ],
-    "stream": false,
-    "max_tokens": 256,
-    "temperature": 0.7
-  }'
-```
+| `/api/chat` | POST | Non-streaming chat with system prompt configuration |
+| `/memory/store` | POST | Manually store a state or fact |
+| `/memory/delete` | POST | Delete facts by keyword to enforce data policies |
+| `/memory` | GET | Retrieve current memory allocations |
+| `/graph/data` | GET | Extract nodes and edges for external auditing |
+| `/ui/` | GET | Serve the administrative web interface |
+| `/ui/graph.html` | GET | Serve the graph visualizer |
 
 ---
 
@@ -238,141 +190,42 @@ curl -X POST http://localhost:11435/api/chat \
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `AIRPI_MODELS_DIR` | `/data/models` | GGUF model directory |
-| `AIRPI_DEFAULT_MODEL` | `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` | Default model |
-| `AIRPI_FAST_MODEL` | `qwen2.5-0.5b-instruct-q4_k_m.gguf` | Low-latency fast lane |
-| `AIRPI_LARGE_MODEL` | `qwen2.5-coder-7b-q4_k_m.gguf` | Large prompt handling |
+| `AIRPI_DEFAULT_MODEL` | `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` | Default execution target |
+| `AIRPI_FAST_MODEL` | `qwen2.5-0.5b-instruct-q4_k_m.gguf` | Low-latency processing model |
+| `AIRPI_LARGE_MODEL` | `qwen2.5-coder-7b-q4_k_m.gguf` | Model for complex parsing |
 | `AIRPI_N_THREADS` | `3` | CPU decode threads |
 | `AIRPI_N_CTX_SMALL` | `2048` | Small model context window |
 | `AIRPI_N_CTX_LARGE` | `2048` | Large model context window |
-| `AIRPI_MAX_QUEUE` | `10` | Max queued requests |
-| `AIRPI_KEEP_ALIVE_TIMEOUT` | `900` | Model idle timeout (seconds) |
+| `AIRPI_MAX_QUEUE` | `10` | Maximum queued requests |
 | `AIRPI_HOST` | `127.0.0.1` | Bind address |
 | `AIRPI_PORT` | `11435` | HTTP port |
-| `AIRPI_LOG_LEVEL` | `info` | Log verbosity (debug, info, warning, error) |
-| `MEMORY_DB_PATH` | `./memory.db` | SQLite memory database location |
-| `MEMORY_MD_MAX_ENTRIES` | `50` | Max entries in memory.md |
-
-See `.env.example` for all options.
-
----
-
-## Performance
-
-### Benchmarks (Qwen2.5-Coder family)
-
-| Model | Size | RAM | tok/sec | First-token |
-|-------|------|-----|---------|------------|
-| 0.5B | Q4_K_M | 0.4 GB | 25–30 | 80 ms |
-| 1.5B | Q4_K_M | 1.2 GB | 12–15 | 120 ms |
-| 7B | Q4_K_M | 4.1 GB | 3–5 | 250 ms |
-| 14B | Q4_K_M | 8.1 GB | 1–2* | 500 ms |
-
-\* With mmap paging to NVMe; full RAM resident is faster but requires larger device.
-
-### Cache Hit Impact
-
-- **Cache miss** (first request in session): full prefill overhead
-- **Cache hit** (subsequent requests): 70–90% reduction in prefill tokens
-- Example: 2000-token prompt, cache hit saves ~1600 decode iterations
+| `AIRPI_LOG_LEVEL` | `info` | Log verbosity |
+| `AIRPI_API_KEY` | `None` | Pre-shared key for Bearer authentication |
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────┐
-│        User Facing (Web + CLI)      │
-│  Chat UI • Graph • CLI              │
-└────────────┬────────────────────────┘
-             │
-┌────────────▼────────────────────────┐
-│   FastAPI Server (server.py)        │
-│  /api/generate • /api/chat          │
-│  /memory • /graph • /ui             │
-└───────────┬─────────────────────────┘
-            │
-     ┌──────┼──────────┐
-     │      │          │
-┌────▼──┐ ┌─▼──────┐ ┌─▼────────────┐
-│ Model │ │ Memory │ │ Knowledge    │
-│Manager│ │ System │ │ Graph        │
-└──┬────┘ └────────┘ └──────────────┘
-   │
-┌──▼──────────────────────────────────┐
-│   llama.cpp (C++ inference core)    │
-│   KV-cache • Session management     │
-└────────────────────────────────────┘
-```
+See `docs/ARCHITECTURE.md` and `docs/PRODUCT_IDENTITY.md` for detailed information on the system's structural design and product boundaries.
 
 ---
 
-## Development
+## Roadmap
 
-### Running Tests
+The development of AirPI prioritizes robust infrastructure over experimental features.
 
-```bash
-pytest tests/ -v              # All tests
-pytest tests/test_server.py   # Unit tests
-pytest tests/test_integration.py -s  # Integration (requires live server)
-```
+1. **AirPI Core:** Stable local inference
+2. **AirPI API:** Ollama-compatible, strictly documented interfaces
+3. **AirPI Policy:** Rules for local processing, forwarding, and blocking
+4. **AirPI Router:** Routing between local models, external backends, and enforcing blocks
+5. **AirPI Memory Control:** Conscious, verifiable, and deletable state management
+6. **AirPI Audit:** Extensive logging, decision proofs, and metrics
+7. **AirPI Integrations:** Deep hooks for PI Guardian, Home Assistant, CLI, and Web-UI
+8. **AirPI Operations:** systemd hardening, health checks, backups, and secure updates
+9. **AirPI UI:** Refined control center for infrastructure management
 
-### Project Structure
-
-```
-AirPI/
-├── server.py                # FastAPI app, endpoints
-├── model_manager.py         # Model loading & cache
-├── config.py                # Configuration
-├── cli/
-│   └── main.py              # CLI implementation
-├── memory/
-│   ├── manager.py           # Persistence, deduplication
-│   └── graph.py             # Concept extraction
-├── ui/
-│   ├── index.html           # Chat interface
-│   ├── graph.html           # Graph visualizer
-│   └── vendor/              # marked.js, DOMPurify (no CDN)
-├── tests/
-│   ├── test_server.py
-│   ├── test_cli.py
-│   ├── test_memory.py
-│   └── test_integration.py
-├── systemd/
-│   └── airpi.service        # systemd unit
-└── docs/
-    ├── API_CONTRACT.md
-    └── OPERATIONS.md
-```
-
----
-
-## Troubleshooting
-
-### Server won't start
-
-```bash
-# Check systemd journal
-sudo journalctl -u airpi --since "5 minutes ago"
-
-# Verify models exist
-ls -lh /data/models/*.gguf
-
-# Test local run with debug logging
-AIRPI_LOG_LEVEL=debug uvicorn server:app --host 127.0.0.1 --port 11435
-```
-
-### Slow inference
-
-- Check `/health` for cache hit rate
-- Monitor queue depth (`queue_depth` in health)
-- Profile with `scripts/airpi_bench.py`
-- Consider: model too large for available RAM, competing processes
-
-### Memory issues
-
-- Reduce `AIRPI_N_CTX_SMALL` / `AIRPI_N_CTX_LARGE`
-- Enable `AIRPI_MMAP=true` to page to NVMe
-- Use smaller model (0.5B or 1.5B instead of 7B)
+### Optional Future Extensions
+Features such as conversational personas, voice interfaces, or heuristic model sparring are considered strictly secondary. If implemented, they will exist as modular, optional extensions that do not interfere with the core infrastructural guarantees.
 
 ---
 
@@ -380,63 +233,30 @@ AIRPI_LOG_LEVEL=debug uvicorn server:app --host 127.0.0.1 --port 11435
 
 ### PI Guardian Router
 
-AirPI is API-compatible with Ollama. Set:
+AirPI acts as the intelligence backend for PI Guardian. Configure PI Guardian to target AirPI using the standard Ollama convention:
 
 ```bash
 export OLLAMA_BASE_URL=http://127.0.0.1:11435
 ```
 
-PI Guardian will route requests to AirPI automatically. No adapter layer needed.
-
 ### Home Assistant
 
-Connect HA to AirPI via the `Ollama` integration. Update the base URL to `http://192.168.x.x:11435` (substitute your Pi's local IP).
+AirPI can securely process smart home automation routines. Connect Home Assistant via the `Ollama` integration by directing the base URL to the local instance (e.g., `http://192.168.x.x:11435`).
 
 ---
 
 ## Contributing
 
-Contributions welcome. Please:
+Contributions must adhere to the principles outlined in `docs/PRODUCT_IDENTITY.md`.
 
 1. Create a feature branch: `git checkout -b feature/your-feature`
-2. Add tests for new functionality
-3. Run `pytest` to verify all tests pass
-4. Create a pull request with a clear description
+2. Validate compliance with the product identity guidelines
+3. Add tests for new functionality
+4. Run `pytest` to verify stability
+5. Submit a pull request with a clear description of infrastructural impact
 
 ---
 
 ## License
 
 MIT License. See [LICENSE](./LICENSE) for details.
-
----
-
-## Roadmap (Phase 3 — Whimsy Features)
-
-Planned for v2.1:
-
-- **Ambient Mode** — Home Assistant webhooks trigger quick summaries
-- **Dream Mode** — Nightly reflection & deduplication
-- **Memory Decay** — Older concepts fade visually in the graph
-- **Persona System** — Vordefined prompt presets (coder, teacher, coach, etc.)
-- **Voice Interface** — Push-to-talk web UI + TTS
-- **Hybrid Router** — Route to external APIs (Claude, OpenAI) when needed
-- **Live Synapse Formation** — Graph updates in real-time during chat
-- **Model Sparring** — Compare responses across models side-by-side
-
----
-
-## Status
-
-- **Phase 1 ✅** — Backend contract, memory schema, graph foundation (93 tests)
-- **Phase 2 ✅** — Chat UI, Memory v1.5, Graph UI, CLI (99 tests)
-- **Phase 3 🚧** — Whimsy features (in planning)
-- **Phase 4 📋** — Performance gates & optimization
-
----
-
-## Contact
-
-Questions? Open an issue on GitHub or reach out to the maintainers.
-
-**AirPI** — Intelligent inference on the edge. 🚀

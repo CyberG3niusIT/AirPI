@@ -99,6 +99,9 @@ PORT: int = int(os.environ.get("AIRPI_PORT", "11435"))
 
 LOG_LEVEL: str = os.environ.get("AIRPI_LOG_LEVEL", "INFO")
 
+# API Security: If set, all endpoints require the `Authorization: Bearer <key>` header.
+API_KEY: str | None = os.environ.get("AIRPI_API_KEY", None)
+
 # ── Keyword-basierte Modellauswahl ────────────────────────────────────────────
 # Prompts mit diesen Keywords werden mit dem größeren Modell bearbeitet
 FAST_MODEL_ALIASES: set[str] = {"fast", "fast-lane", "airpi-fast"}

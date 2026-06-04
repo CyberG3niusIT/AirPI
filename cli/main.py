@@ -37,6 +37,13 @@ BENCH_PROMPTS = [
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _get_auth_headers() -> dict:
+    api_key = os.environ.get("AIRPI_API_KEY")
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {}
+
+
 def _stream_chat(url: str, model: str, messages: list[dict], session: str) -> Iterator[tuple[str, dict | None]]:
     """Yield (token_text, final_stats_or_None) from /api/chat (applies chat template properly)."""
     payload = {
@@ -49,6 +56,7 @@ def _stream_chat(url: str, model: str, messages: list[dict], session: str) -> It
         with requests.post(
             f"{url}/api/chat",
             json=payload,
+            headers=_get_auth_headers(),
             stream=True,
             timeout=300,
         ) as resp:
@@ -89,6 +97,7 @@ def _stream_generate(url: str, model: str, prompt: str, session: str) -> Iterato
         with requests.post(
             f"{url}/api/generate",
             json=payload,
+            headers=_get_auth_headers(),
             stream=True,
             timeout=300,
         ) as resp:
@@ -119,7 +128,7 @@ def _stream_generate(url: str, model: str, prompt: str, session: str) -> Iterato
 
 def _get_json(url: str, path: str) -> dict:
     try:
-        resp = requests.get(f"{url}{path}", timeout=10)
+        resp = requests.get(f"{url}{path}", headers=_get_auth_headers(), timeout=10)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.Timeout:
@@ -300,6 +309,7 @@ def chat(session: str, model: str | None, url: str, system: str | None, system_f
                     resp = requests.post(
                         f"{url}/memory/store",
                         json={"content": fact, "category": "fact"},
+                        headers=_get_auth_headers(),
                         timeout=10,
                     )
                     resp.raise_for_status()
@@ -317,6 +327,7 @@ def chat(session: str, model: str | None, url: str, system: str | None, system_f
                     resp = requests.post(
                         f"{url}/memory/delete",
                         json={"keyword": keyword},
+                        headers=_get_auth_headers(),
                         timeout=10,
                     )
                     resp.raise_for_status()
@@ -333,7 +344,7 @@ def chat(session: str, model: str | None, url: str, system: str | None, system_f
 
         if user_input.lower() in ("memory?", "was weißt du?", "memory"):
             try:
-                resp = requests.get(f"{url}/memory", timeout=10)
+                resp = requests.get(f"{url}/memory", headers=_get_auth_headers(), timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
                 content = data.get("content", "").strip()
