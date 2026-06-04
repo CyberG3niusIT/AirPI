@@ -200,6 +200,7 @@ curl -X POST http://localhost:11435/api/generate \
 | `AIRPI_HOST` | `127.0.0.1` | Bind address |
 | `AIRPI_PORT` | `11435` | HTTP port |
 | `AIRPI_LOG_LEVEL` | `info` | Log verbosity |
+| `AIRPI_API_KEY` | `None` | Pre-shared key for Bearer authentication |
 
 ---
 

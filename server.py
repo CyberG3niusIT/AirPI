@@ -24,7 +24,8 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -196,6 +197,18 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+security = HTTPBearer(auto_error=False)
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials | None = Security(security)) -> None:
+    if not config.API_KEY:
+        return
+    if not credentials or credentials.credentials != config.API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 _UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
 if os.path.isdir(_UI_DIR):
@@ -394,7 +407,7 @@ async def prometheus_metrics() -> PlainTextResponse:
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
-@app.get("/api/tags")
+@app.get("/api/tags", dependencies=[Depends(verify_api_key)])
 async def list_models() -> dict:
     models = []
     if os.path.isdir(config.MODELS_DIR):
@@ -413,7 +426,7 @@ async def list_models() -> dict:
     return {"models": models}
 
 
-@app.post("/api/generate", response_model=None)
+@app.post("/api/generate", response_model=None, dependencies=[Depends(verify_api_key)])
 async def generate(request: GenerateRequest, http_request: Request) -> StreamingResponse | GenerateResponse:
     global _queue_depth
     request_id = http_request.headers.get("x-request-id", str(uuid.uuid4()))
@@ -672,7 +685,7 @@ class MemoryDeleteRequest(BaseModel):
     keyword: str = Field(min_length=1)
 
 
-@app.post("/memory/store")
+@app.post("/memory/store", dependencies=[Depends(verify_api_key)])
 async def memory_store(request: MemoryStoreRequest) -> dict:
     """Speichert einen Fakt manuell."""
     try:
@@ -684,7 +697,7 @@ async def memory_store(request: MemoryStoreRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/memory/delete")
+@app.post("/memory/delete", dependencies=[Depends(verify_api_key)])
 async def memory_delete(request: MemoryDeleteRequest) -> dict:
     """Markiert alle Eintraege mit keyword als inaktiv."""
     try:
@@ -697,7 +710,7 @@ async def memory_delete(request: MemoryDeleteRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/memory")
+@app.get("/memory", dependencies=[Depends(verify_api_key)])
 async def memory_get() -> dict:
     """Gibt den aktuellen Memory-Inhalt zurueck."""
     try:
@@ -784,7 +797,7 @@ async def graph_redirect() -> RedirectResponse:
     return RedirectResponse(url="/ui/graph.html", status_code=307)
 
 
-@app.get("/graph/data")
+@app.get("/graph/data", dependencies=[Depends(verify_api_key)])
 async def graph_data() -> dict:
     global _graph_cache
     try:
@@ -815,7 +828,7 @@ async def graph_data() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/graph/manual-edges")
+@app.get("/graph/manual-edges", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edges() -> dict:
     try:
         return {"edges": get_memory_manager().list_manual_edges()}
@@ -824,7 +837,7 @@ async def graph_manual_edges() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/manual-edges")
+@app.post("/graph/manual-edges", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_create(request: GraphManualEdgeCreateRequest) -> dict:
     try:
         edge = get_memory_manager().add_manual_edge(**request.model_dump())
@@ -838,7 +851,7 @@ async def graph_manual_edge_create(request: GraphManualEdgeCreateRequest) -> dic
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.patch("/graph/manual-edges/{edge_id}")
+@app.patch("/graph/manual-edges/{edge_id}", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_update(edge_id: int, request: GraphManualEdgeUpdateRequest) -> dict:
     try:
         edge = get_memory_manager().update_manual_edge(
@@ -855,7 +868,7 @@ async def graph_manual_edge_update(edge_id: int, request: GraphManualEdgeUpdateR
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/manual-edges/{edge_id}")
+@app.delete("/graph/manual-edges/{edge_id}", dependencies=[Depends(verify_api_key)])
 async def graph_manual_edge_delete(edge_id: int) -> dict:
     try:
         deleted = get_memory_manager().delete_manual_edge(edge_id)
@@ -869,7 +882,7 @@ async def graph_manual_edge_delete(edge_id: int) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/auto-edges/hide")
+@app.post("/graph/auto-edges/hide", dependencies=[Depends(verify_api_key)])
 async def graph_auto_edge_hide(request: GraphAutoEdgeHideRequest) -> dict:
     try:
         override = get_memory_manager().hide_auto_edge(request.edge_key, request.note)
@@ -883,7 +896,7 @@ async def graph_auto_edge_hide(request: GraphAutoEdgeHideRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.get("/graph/nodes")
+@app.get("/graph/nodes", dependencies=[Depends(verify_api_key)])
 async def graph_nodes_list() -> dict:
     """Listet alle manuellen Graph-Knoten."""
     try:
@@ -893,7 +906,7 @@ async def graph_nodes_list() -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.post("/graph/nodes")
+@app.post("/graph/nodes", dependencies=[Depends(verify_api_key)])
 async def graph_node_create(request: GraphManualNodeCreateRequest) -> dict:
     """Erstellt einen manuellen Graph-Knoten."""
     try:
@@ -908,7 +921,7 @@ async def graph_node_create(request: GraphManualNodeCreateRequest) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.patch("/graph/nodes/{node_id}")
+@app.patch("/graph/nodes/{node_id}", dependencies=[Depends(verify_api_key)])
 async def graph_node_update(node_id: int, request: GraphManualNodeUpdateRequest) -> dict:
     """Aktualisiert einen manuellen Graph-Knoten."""
     try:
@@ -926,7 +939,7 @@ async def graph_node_update(node_id: int, request: GraphManualNodeUpdateRequest)
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/nodes/{node_id}")
+@app.delete("/graph/nodes/{node_id}", dependencies=[Depends(verify_api_key)])
 async def graph_node_delete(node_id: int) -> dict:
     """Soft-löscht einen manuellen Graph-Knoten."""
     try:
@@ -941,7 +954,7 @@ async def graph_node_delete(node_id: int) -> dict:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-@app.delete("/graph/auto-edges/override")
+@app.delete("/graph/auto-edges/override", dependencies=[Depends(verify_api_key)])
 async def graph_auto_edge_override_clear(request: GraphEdgeOverrideClearRequest) -> dict:
     try:
         cleared = get_memory_manager().clear_edge_override(request.edge_key, request.action)
@@ -1043,7 +1056,7 @@ async def _stream_chat(
         _queue_depth -= 1
 
 
-@app.post("/api/chat", response_model=None)
+@app.post("/api/chat", response_model=None, dependencies=[Depends(verify_api_key)])
 async def api_chat(request: ChatRequest, http_request: Request) -> StreamingResponse | dict:
     global _queue_depth
     request_id = http_request.headers.get("x-request-id", str(uuid.uuid4()))
